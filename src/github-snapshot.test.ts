@@ -145,6 +145,10 @@ describe('GitHub snapshot planning', () => {
 
     expect(planGitHubSnapshot({ ...request, maxPages: 1, singlePage: false }).markdown).toHaveLength(1);
     expect(planGitHubSnapshot({ ...request, maxPages: 2, singlePage: true })).toMatchObject({ truncated: true });
+    expect(planGitHubSnapshot({ ...request, singlePage: false })).toMatchObject({
+      markdown: request.tree.entries,
+      truncated: false,
+    });
   });
 
   it('requires a resolved ref when the URL does not include one', () => {

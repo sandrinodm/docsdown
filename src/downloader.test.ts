@@ -76,10 +76,8 @@ describe('documentation download', () => {
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
     temporaryDirectories.push(outputDirectory);
     try {
-      const summary = await downloadSite(options(`${server.origin}/docs`, outputDirectory)).pipe(
-        Effect.provide(TestLayer),
-        Effect.runPromise
-      );
+      const { maxPages: _maxPages, ...unlimitedOptions } = options(`${server.origin}/docs`, outputDirectory);
+      const summary = await downloadSite(unlimitedOptions).pipe(Effect.provide(TestLayer), Effect.runPromise);
 
       expect(summary.pages).toEqual([
         { url: `${server.origin}/docs`, title: 'Documentation' },

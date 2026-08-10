@@ -224,10 +224,11 @@ describe('GitHub repository downloads', () => {
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-github-test-'));
     temporaryDirectories.push(outputDirectory);
     try {
-      const summary = await downloadGitHubRepository(
-        options('https://github.com/acme/docs', outputDirectory),
-        server.config
-      ).pipe(Effect.provide(TestLayer), Effect.runPromise);
+      const { maxPages: _maxPages, ...unlimitedOptions } = options('https://github.com/acme/docs', outputDirectory);
+      const summary = await downloadGitHubRepository(unlimitedOptions, server.config).pipe(
+        Effect.provide(TestLayer),
+        Effect.runPromise
+      );
 
       expect(summary).toMatchObject({ provider: 'github', pagesDownloaded: 3, mediaDownloaded: 2, truncated: false });
       expect(summary.failures).toHaveLength(4);

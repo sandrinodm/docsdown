@@ -113,14 +113,15 @@ docsdown https://example.com/docs/getting-started \
 
 ### Download a large documentation site
 
-Raise the page ceiling and reduce request concurrency when a site is large or rate-sensitive:
+docsdown follows the complete selected documentation scope by default. Reduce request concurrency when a large site is rate-sensitive:
 
 ```bash
 docsdown https://example.com/docs \
-  --max-pages 2000 \
   --concurrency 3 \
   --output ./docs/example
 ```
+
+Use `--max-pages` only when you intentionally want to stop after a fixed number of pages. Limited runs are marked as truncated and do not remove stale files.
 
 ### Download a complete GitHub repository
 
@@ -234,7 +235,6 @@ Every completed download writes a token-free `.docsdown.json` beside `manifest.j
   "provider": "github",
   "options": {
     "concurrency": 6,
-    "maxPages": 500,
     "maxMediaBytes": 104857600,
     "singlePage": false,
     "keepStale": false,
@@ -389,17 +389,17 @@ Only paths previously recorded by docsdown with a valid digest are cleanup candi
 
 ### Download options
 
-| Option                     |  Default | Description                                                                              |
-| -------------------------- | -------: | ---------------------------------------------------------------------------------------- |
-| `--output, -o <directory>` | `./docs` | Exact destination directory for this archive.                                            |
-| `--concurrency, -c <n>`    |      `6` | Maximum simultaneous page or media requests within one archive.                          |
-| `--max-pages <n>`          |    `500` | Safety ceiling for selected or crawled Markdown pages.                                   |
-| `--max-media-mb <n>`       |    `100` | Maximum size of one referenced media file.                                               |
-| `--single-page`            |      off | Stops after one selected page; use a GitHub blob URL to select an exact repository file. |
-| `--keep-stale`             |      off | Disables stale-file deletion for this archive while retaining ownership metadata.        |
-| `--verbose`                |      off | Prints probes, requests, and skipped media.                                              |
-| `--provider <provider>`    |   `auto` | Selects `auto`, `website`, or `github`.                                                  |
-| `--include <path>`         |     none | Adds a GitHub path to the selection; repeat the flag for multiple paths.                 |
+| Option                     |  Default | Description                                                                                |
+| -------------------------- | -------: | ------------------------------------------------------------------------------------------ |
+| `--output, -o <directory>` | `./docs` | Exact destination directory for this archive.                                              |
+| `--concurrency, -c <n>`    |      `6` | Maximum simultaneous page or media requests within one archive.                            |
+| `--max-pages <n>`          |     none | Optional ceiling for selected or crawled Markdown pages; omitted downloads the full scope. |
+| `--max-media-mb <n>`       |    `100` | Maximum size of one referenced media file.                                                 |
+| `--single-page`            |      off | Stops after one selected page; use a GitHub blob URL to select an exact repository file.   |
+| `--keep-stale`             |      off | Disables stale-file deletion for this archive while retaining ownership metadata.          |
+| `--verbose`                |      off | Prints probes, requests, and skipped media.                                                |
+| `--provider <provider>`    |   `auto` | Selects `auto`, `website`, or `github`.                                                    |
+| `--include <path>`         |     none | Adds a GitHub path to the selection; repeat the flag for multiple paths.                   |
 
 ### Update options
 

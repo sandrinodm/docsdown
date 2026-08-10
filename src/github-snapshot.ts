@@ -85,9 +85,9 @@ export interface GitHubSnapshotRequest {
   readonly includes?: ReadonlyArray<string>;
 
   /**
-   * Maximum number of Markdown files to select.
+   * Optional maximum number of Markdown files to select.
    */
-  readonly maxPages: number;
+  readonly maxPages?: number;
 
   /**
    * Whether to select only the first discovered Markdown file.
@@ -207,7 +207,7 @@ export const resolveGitHubScopes = (target: GitHubTarget, selections: ReadonlyAr
  * Builds a deterministic archive plan from a GitHub URL and recursive tree.
  */
 export const planGitHubSnapshot = (request: GitHubSnapshotRequest): GitHubSnapshotPlan => {
-  if (request.maxPages < 1) throw new Error('--max-pages must be at least 1');
+  if (request.maxPages !== undefined && request.maxPages < 1) throw new Error('--max-pages must be at least 1');
   const target = parseGitHubUrl(request.url);
   const ref = target.ref ?? request.defaultRef;
   if (ref === undefined) throw new Error(`Could not resolve a GitHub ref for ${String(request.url)}`);
@@ -224,7 +224,10 @@ export const planGitHubSnapshot = (request: GitHubSnapshotRequest): GitHubSnapsh
   const discovered = safeBlobs
     .filter((entry) => isGitHubMarkdownPath(entry.path) && inScope(entry.path))
     .sort((left, right) => left.path.localeCompare(right.path));
-  const markdown = discovered.slice(0, request.singlePage ? 1 : Math.min(request.maxPages, discovered.length));
+  const markdown = discovered.slice(
+    0,
+    request.singlePage ? 1 : Math.min(request.maxPages ?? discovered.length, discovered.length)
+  );
   /**
    * Looks up a safe blob's declared size without exposing the mutable planning index.
    */

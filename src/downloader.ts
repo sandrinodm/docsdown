@@ -302,6 +302,7 @@ export const downloadSite = (options: DownloadOptions) =>
     const queue: Array<URL> = [startUrl];
     const queued = new Set([crawlPageKey(startUrl)]);
     const completed = new Set<string>();
+    const maxPages = options.maxPages;
     const localizationPolicy: LocalizationPolicy = {
       /**
        * Maps crawlable in-scope pages to their archive destinations.
@@ -414,8 +415,8 @@ export const downloadSite = (options: DownloadOptions) =>
               } satisfies PageResult;
             });
 
-          while (queue.length > 0 && completed.size < options.maxPages) {
-            const available = options.maxPages - completed.size;
+          while (queue.length > 0 && (maxPages === undefined || completed.size < maxPages)) {
+            const available = maxPages === undefined ? options.concurrency : maxPages - completed.size;
             const batch = queue.splice(0, Math.min(options.concurrency, available));
             for (const url of batch) completed.add(crawlPageKey(url));
             const dispatches = batch.map((url) => ({ url, order: nextPageOrder++ }));

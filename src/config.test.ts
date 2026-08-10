@@ -53,6 +53,10 @@ describe('archive update configuration', () => {
 
     const selected = makeArchiveConfig({ ...options, githubPaths: ['docs', 'reference'] }, 'github');
     expect(selected.options.githubPaths).toEqual(['docs', 'reference']);
+
+    const { maxPages: _maxPages, ...unlimitedOptions } = options;
+    const unlimited = makeArchiveConfig(unlimitedOptions, 'github');
+    expect(unlimited.options).not.toHaveProperty('maxPages');
   });
 
   it('reports malformed and schema-invalid configs and tolerates a missing output directory', async () => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Console, Effect, Layer } from 'effect';
+import { Console, Effect, Layer, Option } from 'effect';
 import { NodeHttpClient, NodeRuntime, NodeServices } from '@effect/platform-node';
 import { Argument, Command, Flag } from 'effect/unstable/cli';
 import { archiveConfigFilename } from './config.js';
@@ -31,11 +31,11 @@ const concurrency = Flag.integer('concurrency').pipe(
 );
 
 /**
- * Crawl ceiling that prevents unexpectedly broad documentation sites from running without bound.
+ * Optional crawl ceiling for callers that intentionally want a partial archive.
  */
 const maxPages = Flag.integer('max-pages').pipe(
-  Flag.withDefault(500),
-  Flag.withDescription('Safety limit for the number of pages to crawl')
+  Flag.optional,
+  Flag.withDescription('Optional limit for the number of pages to crawl; omitted downloads the full scope')
 );
 
 /**
@@ -125,11 +125,12 @@ const downloadCommand = Command.make('docsdown', {
   Command.withHandler(
     ({ url, outputDirectory, concurrency, maxPages, maxMediaMb, singlePage, keepStale, verbose, provider, include }) =>
       Effect.gen(function* () {
+        const pageLimit = Option.getOrUndefined(maxPages);
         const summary = yield* downloadAndConfigure({
           url,
           outputDirectory,
           concurrency,
-          maxPages,
+          ...(pageLimit === undefined ? {} : { maxPages: pageLimit }),
           maxMediaBytes: maxMediaMb * 1024 * 1024,
           singlePage,
           keepStale,

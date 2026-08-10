@@ -18,9 +18,9 @@ export interface ArchiveDownloadSettings {
   readonly concurrency: number;
 
   /**
-   * Maximum number of Markdown pages selected per run.
+   * Optional maximum number of Markdown pages selected per run.
    */
-  readonly maxPages: number;
+  readonly maxPages?: number;
 
   /**
    * Maximum permitted size for one media response.
@@ -103,7 +103,7 @@ const ArchiveConfigSchema = Schema.Struct({
   provider: Schema.Literals(['website', 'github']),
   options: Schema.Struct({
     concurrency: Schema.Number,
-    maxPages: Schema.Number,
+    maxPages: Schema.optionalKey(Schema.Number),
     maxMediaBytes: Schema.Number,
     singlePage: Schema.Boolean,
     keepStale: Schema.Boolean,
@@ -134,7 +134,7 @@ export const makeArchiveConfig = (options: DocumentationDownloadOptions, provide
   provider,
   options: {
     concurrency: options.concurrency,
-    maxPages: options.maxPages,
+    ...(options.maxPages === undefined ? {} : { maxPages: options.maxPages }),
     maxMediaBytes: options.maxMediaBytes,
     singlePage: options.singlePage,
     keepStale: options.keepStale,

@@ -269,7 +269,7 @@ export const downloadGitHubRepository = (
             url: options.url,
             ...(defaultRef !== undefined ? { defaultRef } : {}),
             includes: options.githubPaths ?? [],
-            maxPages: options.maxPages,
+            ...(options.maxPages === undefined ? {} : { maxPages: options.maxPages }),
             singlePage: options.singlePage,
             tree: { truncated: tree.truncated, entries: tree.tree },
           });

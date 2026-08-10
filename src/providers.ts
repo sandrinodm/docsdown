@@ -39,9 +39,9 @@ export interface DownloadOptions {
   readonly concurrency: number;
 
   /**
-   * Hard page limit that prevents unbounded discovery.
+   * Optional hard page limit; omission allows discovery to exhaust the selected scope.
    */
-  readonly maxPages: number;
+  readonly maxPages?: number;
 
   /**
    * Per-media byte limit enforced against declared and actual response sizes.
@@ -94,7 +94,7 @@ export interface DocumentationDownloadOptions extends DownloadOptions {
  */
 const validateDownloadOptions = (options: DownloadOptions): Error | undefined => {
   if (options.concurrency < 1) return new Error('--concurrency must be at least 1');
-  if (options.maxPages < 1) return new Error('--max-pages must be at least 1');
+  if (options.maxPages !== undefined && options.maxPages < 1) return new Error('--max-pages must be at least 1');
   if (options.maxMediaBytes < 1) return new Error('--max-media-mb must be greater than 0');
 };
 
