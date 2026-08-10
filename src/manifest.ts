@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
-import { Effect, FileSystem, Option, Schema } from 'effect';
+import { Effect, Option, Schema } from 'effect';
+import { makeOutputBoundary } from './output-boundary.js';
 
 /**
  * Archive resource classes with distinct cleanup and reporting semantics.
@@ -316,9 +317,9 @@ export const describeArchiveFile = (
  */
 export const finalizeManifest = (rootDirectory: string, run: ManifestRun) =>
   Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
+    const outputBoundary = yield* makeOutputBoundary(rootDirectory);
     const currentFiles = normalizedFiles(run.files);
-    const previous = yield* fileSystem.readFileString(path.join(rootDirectory, manifestFilename)).pipe(
+    const previous = yield* outputBoundary.readFileString(path.join(rootDirectory, manifestFilename)).pipe(
       Effect.map(parsePreviousManifest),
       Effect.catch(() => Effect.succeed(undefined))
     );
@@ -331,19 +332,14 @@ export const finalizeManifest = (rootDirectory: string, run: ManifestRun) =>
     const cleanupResults = cleanupEligible
       ? yield* Effect.forEach(
           staleFiles,
-          (file): Effect.Effect<CleanupResult, never, FileSystem.FileSystem> =>
+          (file): Effect.Effect<CleanupResult, never> =>
             Effect.gen(function* () {
               const destination = path.resolve(rootDirectory, ...file.path.split('/'));
-              const relative = path.relative(rootDirectory, destination);
-              /* v8 ignore next -- Safe, canonical manifest paths cannot resolve outside their validated root. */
-              if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
-                return { state: 'failed', file, message: 'Resolved path escaped the archive root' } as const;
-              }
-              const exists = yield* fileSystem.exists(destination);
+              const exists = yield* outputBoundary.exists(destination);
               if (!exists) return { state: 'removed', file } as const;
-              const content = yield* fileSystem.readFile(destination);
+              const content = yield* outputBoundary.readFile(destination);
               if (digest(content) !== file.sha256) return { state: 'preserved', file } as const;
-              yield* fileSystem.remove(destination, { force: true });
+              yield* outputBoundary.removeFile(destination);
               return { state: 'removed', file } as const;
             }).pipe(
               Effect.catch((error) =>
@@ -394,14 +390,13 @@ export const finalizeManifest = (rootDirectory: string, run: ManifestRun) =>
       },
     };
     const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
-    yield* fileSystem.writeFileString(path.join(rootDirectory, manifestFilename), serialized);
+    yield* outputBoundary.writeFile(path.join(rootDirectory, manifestFilename), serialized);
 
     let historyPath: string | undefined;
     if (status === 'success') {
       const historyDirectory = path.join(rootDirectory, historyDirectoryName);
       historyPath = path.join(historyDirectory, `${runId}.json`);
-      yield* fileSystem.makeDirectory(historyDirectory, { recursive: true });
-      yield* fileSystem.writeFileString(historyPath, serialized);
+      yield* outputBoundary.writeFile(historyPath, serialized);
     }
 
     return {

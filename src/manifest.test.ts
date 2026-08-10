@@ -1,6 +1,6 @@
 import { NodeServices } from '@effect/platform-node';
 import { Effect } from 'effect';
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -151,6 +151,55 @@ describe('archive manifests', () => {
     expect(result.historyPath).toBeUndefined();
     const manifest = JSON.parse(await readFile(path.join(root, 'manifest.json'), 'utf8'));
     expect(manifest.ownedFiles).toEqual([stale]);
+  });
+
+  it('never follows a stale-file parent symlink outside the archive during cleanup', async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), 'docsdown-manifest-test-'));
+    temporaryDirectories.push(parent);
+    const root = path.join(parent, 'archive');
+    const outside = path.join(parent, 'outside');
+    await mkdir(root);
+    await mkdir(outside);
+    const outsideFile = path.join(outside, 'stale.md');
+    await writeFile(outsideFile, 'stale');
+    await symlink(outside, path.join(root, 'escaped'), 'junction');
+    const stale = describeArchiveFile(
+      root,
+      path.join(root, 'escaped', 'stale.md'),
+      'page',
+      'https://example.com/stale',
+      'stale'
+    );
+    await writeFile(path.join(root, 'manifest.json'), JSON.stringify({ ownedFiles: [stale] }));
+
+    const result = await finalize(root, makeRun());
+
+    expect(result.removed).toEqual([]);
+    expect(result.cleanupFailures).toEqual([
+      expect.objectContaining({ path: 'escaped/stale.md', message: expect.stringContaining('output root') }),
+    ]);
+    await expect(readFile(outsideFile, 'utf8')).resolves.toBe('stale');
+  });
+
+  it('does not write manifest metadata through hard links or directory symlinks outside the archive', async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), 'docsdown-manifest-test-'));
+    temporaryDirectories.push(parent);
+    const root = path.join(parent, 'archive');
+    const outside = path.join(parent, 'outside');
+    await mkdir(root);
+    await mkdir(outside);
+    const outsideManifest = path.join(outside, 'manifest.json');
+    await writeFile(outsideManifest, 'outside sentinel');
+    await link(outsideManifest, path.join(root, 'manifest.json'));
+
+    await expect(finalize(root, makeRun())).resolves.toMatchObject({ status: 'success' });
+    await expect(readFile(outsideManifest, 'utf8')).resolves.toBe('outside sentinel');
+
+    await rm(path.join(root, 'manifest.json'));
+    await rm(path.join(root, '.manifests'), { recursive: true });
+    await symlink(outside, path.join(root, '.manifests'), 'junction');
+    await expect(finalize(root, makeRun())).rejects.toThrow();
+    await expect(readdir(outside)).resolves.toEqual(['manifest.json']);
   });
 
   it('preserves stale files whose contents changed locally', async () => {

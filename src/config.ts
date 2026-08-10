@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import { Effect, FileSystem, Schema } from 'effect';
+import { makeOutputBoundary } from './output-boundary.js';
 import type { ProviderKind, DocumentationDownloadOptions } from './providers.js';
 
 /**
@@ -112,6 +113,19 @@ const ArchiveConfigSchema = Schema.Struct({
 });
 
 /**
+ * Parses and validates one untrusted configuration source.
+ */
+const decodeArchiveConfig = (source: string) =>
+  Effect.gen(function* () {
+    const json = yield* Effect.try(() => JSON.parse(source) as unknown).pipe(
+      Effect.mapError((error) => new Error(`Invalid JSON: ${error.message}`))
+    );
+    return yield* Schema.decodeUnknownEffect(ArchiveConfigSchema)(json).pipe(
+      Effect.mapError((error) => new Error(`Invalid configuration: ${error.message}`))
+    );
+  });
+
+/**
  * Converts active download options into a token-free portable configuration.
  */
 export const makeArchiveConfig = (options: DocumentationDownloadOptions, provider: ProviderKind): ArchiveConfig => ({
@@ -134,8 +148,8 @@ export const makeArchiveConfig = (options: DocumentationDownloadOptions, provide
  */
 export const writeArchiveConfig = (rootDirectory: string, config: ArchiveConfig) =>
   Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    yield* fileSystem.writeFileString(
+    const outputBoundary = yield* makeOutputBoundary(rootDirectory);
+    yield* outputBoundary.writeFile(
       path.join(rootDirectory, archiveConfigFilename),
       `${JSON.stringify(config, null, 2)}\n`
     );
@@ -148,12 +162,7 @@ export const readArchiveConfig = (configPath: string) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const source = yield* fileSystem.readFileString(configPath);
-    const json = yield* Effect.try(() => JSON.parse(source) as unknown).pipe(
-      Effect.mapError((error) => new Error(`Invalid JSON: ${error.message}`))
-    );
-    return yield* Schema.decodeUnknownEffect(ArchiveConfigSchema)(json).pipe(
-      Effect.mapError((error) => new Error(`Invalid configuration: ${error.message}`))
-    );
+    return yield* decodeArchiveConfig(source);
   });
 
 /**
@@ -164,15 +173,35 @@ export const discoverArchiveConfigs = (outputDirectory: string) =>
     const fileSystem = yield* FileSystem.FileSystem;
     const rootDirectory = path.resolve(outputDirectory);
     if (!(yield* fileSystem.exists(rootDirectory))) return [];
-    const matches = yield* fileSystem.glob(`**/${archiveConfigFilename}`, {
-      root: rootDirectory,
-      exclude: ['**/.manifests/**'],
-    });
+    const outputBoundary = yield* makeOutputBoundary(rootDirectory);
+    const configPaths: Array<string> = [];
+
+    /**
+     * Walks verified real directories without allowing recursive discovery to follow symlinks.
+     */
+    const discover = (directory: string): Effect.Effect<void, unknown> =>
+      Effect.gen(function* () {
+        const entries = yield* fileSystem.readDirectory(directory);
+        for (const entry of entries.sort((left, right) => left.localeCompare(right))) {
+          if (entry === '.manifests') continue;
+          const candidate = path.join(directory, entry);
+          const safePath = yield* outputBoundary.resolveFile(candidate).pipe(
+            Effect.map((resolved) => resolved as string | undefined),
+            Effect.catch(() => Effect.succeed(undefined))
+          );
+          if (!safePath) continue;
+          const info = yield* fileSystem.stat(safePath);
+          if (info.type === 'Directory') yield* discover(safePath);
+          else if (info.type === 'File' && entry === archiveConfigFilename) configPaths.push(safePath);
+        }
+      });
+
+    yield* discover(rootDirectory);
     return yield* Effect.forEach(
-      matches.sort((left, right) => left.localeCompare(right)),
-      (match): Effect.Effect<DiscoveredArchiveConfig, never, FileSystem.FileSystem> => {
-        const configPath = path.resolve(rootDirectory, match);
-        return readArchiveConfig(configPath).pipe(
+      configPaths,
+      (configPath): Effect.Effect<DiscoveredArchiveConfig, never, FileSystem.FileSystem> => {
+        return outputBoundary.readFileString(configPath).pipe(
+          Effect.flatMap(decodeArchiveConfig),
           Effect.map((config) => ({ ok: true, path: configPath, config }) as const),
           Effect.catch((error) => Effect.succeed({ ok: false, path: configPath, message: error.message } as const))
         );

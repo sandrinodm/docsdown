@@ -443,6 +443,24 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete contribution and release
 
 ## Security
 
+Remote documentation is treated as untrusted input. Page URLs, GitHub tree entries, media references, manifest records,
+and update configurations cannot select a file outside the chosen archive root.
+
+Every filesystem mutation passes through one canonical output boundary:
+
+- Literal, percent-encoded, double-encoded, and Unicode dot segments cannot escape the archive.
+- Existing parent directories are resolved before use. A symlink or redirected parent that leaves the archive is
+  rejected.
+- Page, media, manifest, history, and configuration writes use a temporary file followed by an atomic rename. Final
+  symlinks and hard links are not followed for writes.
+- Stale cleanup resolves and revalidates owned files before reading or removing them.
+- `docsdown update` does not accept configurations reached through a directory symlink outside its search root.
+
+The path passed to `--output` is the trust anchor. If that path is itself a symlink, its canonical target becomes the
+archive root. The boundary protects against remote path input and pre-existing redirected paths. As with other portable
+filesystem tools, the output tree should not be concurrently mutated by an untrusted local process while a run is in
+progress.
+
 Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## License

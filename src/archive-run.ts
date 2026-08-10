@@ -1,7 +1,8 @@
-import { Data, Effect, FileSystem, Semaphore } from 'effect';
+import { Data, Effect, Semaphore, type FileSystem } from 'effect';
 import * as HttpClient from 'effect/unstable/http/HttpClient';
 import * as path from 'node:path';
 import { describeArchiveFile, finalizeManifest, type ArchiveFile } from './manifest.js';
+import { makeOutputBoundary } from './output-boundary.js';
 import type { DownloadStrategy, ProviderKind } from './providers.js';
 
 /**
@@ -274,6 +275,11 @@ export class ArchiveRunError extends Data.TaggedError('ArchiveRunError')<{
 }> {}
 
 /**
+ * Normalizes recoverable transport and response failures for manifest reporting.
+ */
+const failureMessage = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
+
+/**
  * Converts an unknown infrastructure failure into the archive module's typed error channel.
  */
 const archiveRunError =
@@ -281,33 +287,9 @@ const archiveRunError =
   (cause: unknown): ArchiveRunError =>
     new ArchiveRunError({
       operation,
-      message: cause instanceof Error ? cause.message : String(cause),
+      message: failureMessage(cause),
       cause,
     });
-
-/**
- * Normalizes recoverable transport and response failures for manifest reporting.
- */
-const failureMessage = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
-
-/**
- * Resolves and validates a provider-selected destination before any archive file is written.
- */
-const archiveDestination = (rootDirectory: string, candidate: string): Effect.Effect<string, ArchiveRunError> =>
-  Effect.try({
-    /**
-     * Resolves the candidate and rejects root or escaping destinations.
-     */
-    try: () => {
-      const destination = path.resolve(candidate);
-      const relative = path.relative(rootDirectory, destination);
-      if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-        throw new Error(`Destination must be a file beneath the archive root: ${candidate}`);
-      }
-      return destination;
-    },
-    catch: archiveRunError('validate destination'),
-  });
 
 /**
  * Runs provider acquisition while owning persistence, accounting, cleanup, and manifest finalization.
@@ -317,8 +299,10 @@ export const runArchive = <E, R>(
   acquire: (archive: ArchiveRecorder) => Effect.Effect<ArchiveAcquisition, E, R>
 ) =>
   Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
     const rootDirectory = path.resolve(options.outputDirectory);
+    const outputBoundary = yield* makeOutputBoundary(rootDirectory).pipe(
+      Effect.mapError(archiveRunError('create archive root'))
+    );
     const pages: Array<{
       readonly url: string;
       readonly title: string;
@@ -336,10 +320,6 @@ export const runArchive = <E, R>(
     let pageSequence = 0;
     let resourceSequence = 0;
     const mediaSemaphore = yield* Semaphore.make(options.concurrency);
-
-    yield* fileSystem
-      .makeDirectory(rootDirectory, { recursive: true })
-      .pipe(Effect.mapError(archiveRunError('create archive root')));
 
     /**
      * Returns the per-destination permit that serializes ownership checks and writes.
@@ -360,7 +340,9 @@ export const runArchive = <E, R>(
      */
     const claimResource = (candidate: string, providerKey: string | undefined, requestedOrder: number | undefined) =>
       Effect.gen(function* () {
-        const destination = yield* archiveDestination(rootDirectory, candidate);
+        const destination = yield* outputBoundary
+          .resolveFile(candidate)
+          .pipe(Effect.mapError(archiveRunError('validate destination')));
         const dedupeKey = providerKey === undefined ? `destination:${destination}` : `provider:${providerKey}`;
         if (claimedResources.has(dedupeKey)) return undefined;
         claimedResources.add(dedupeKey);
@@ -388,9 +370,7 @@ export const runArchive = <E, R>(
           if (existing && (existing.order > order || (existing.order === order && existing.sequence > sequence))) {
             return;
           }
-          yield* fileSystem.makeDirectory(path.dirname(destination), { recursive: true });
-          if (typeof content === 'string') yield* fileSystem.writeFileString(destination, content);
-          else yield* fileSystem.writeFile(destination, content);
+          yield* outputBoundary.writeFile(destination, content);
           files.set(file.path, { file, order, sequence });
         })
       );

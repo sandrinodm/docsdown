@@ -11,6 +11,7 @@
     "assets/docsdown-banner.webp",
     "dist",
     "README.md",
+    "SECURITY.md",
     "LICENSE"
   ],
   "scripts": {

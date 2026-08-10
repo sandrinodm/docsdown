@@ -1,7 +1,7 @@
 import { NodeHttpClient, NodeServices } from '@effect/platform-node';
 import { Effect, FileSystem, Layer } from 'effect';
 import * as HttpClient from 'effect/unstable/http/HttpClient';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -407,6 +407,44 @@ describe('archive run', () => {
           });
           return { truncated: false };
         })
+    ).pipe(Effect.flip, Effect.provide(TestLayer), Effect.runPromise);
+
+    expect(error).toBeInstanceOf(ArchiveRunError);
+    expect(error).toMatchObject({ _tag: 'ArchiveRunError', operation: 'validate destination' });
+    await expect(readFile(outsideDestination, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects a destination whose parent symlink escapes the archive root', async () => {
+    const parentDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-archive-run-test-'));
+    temporaryDirectories.push(parentDirectory);
+    const rootDirectory = path.join(parentDirectory, 'archive');
+    const outsideDirectory = path.join(parentDirectory, 'outside');
+    await mkdir(rootDirectory);
+    await mkdir(outsideDirectory);
+    await symlink(outsideDirectory, path.join(rootDirectory, 'escaped'), 'junction');
+    const outsideDestination = path.join(outsideDirectory, 'page.md');
+
+    const error = await runArchive(
+      {
+        provider: 'website',
+        source: 'https://example.com/docs',
+        scopePath: '/docs',
+        scopePaths: ['/docs'],
+        outputDirectory: rootDirectory,
+        concurrency: 1,
+        maxMediaBytes: 1_000,
+        cleanupEnabled: true,
+      },
+      (archive) =>
+        archive
+          .writePage({
+            url: 'https://example.com/docs/escaped',
+            title: 'Escaping page',
+            strategy: 'markdown-suffix',
+            destination: path.join(rootDirectory, 'escaped', 'page.md'),
+            content: '# Must not be written\n',
+          })
+          .pipe(Effect.as({ truncated: false }))
     ).pipe(Effect.flip, Effect.provide(TestLayer), Effect.runPromise);
 
     expect(error).toBeInstanceOf(ArchiveRunError);

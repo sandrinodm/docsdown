@@ -1,6 +1,6 @@
 import { NodeServices } from '@effect/platform-node';
 import { Effect } from 'effect';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -72,5 +72,39 @@ describe('archive update configuration', () => {
     expect(discovered.map((entry) => (entry.ok ? '' : entry.message)).join('\n')).toContain('Invalid JSON');
     expect(discovered.map((entry) => (entry.ok ? '' : entry.message)).join('\n')).toContain('Invalid configuration');
     await expect(run(discoverArchiveConfigs(path.join(root, 'missing')))).resolves.toEqual([]);
+  });
+
+  it('does not overwrite a configuration target outside the archive through a hard link', async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), 'docsdown-config-test-'));
+    temporaryDirectories.push(parent);
+    const archiveRoot = path.join(parent, 'archive');
+    const outsideConfig = path.join(parent, 'outside.json');
+    await mkdir(archiveRoot);
+    await writeFile(outsideConfig, 'outside sentinel');
+    await link(outsideConfig, path.join(archiveRoot, archiveConfigFilename));
+
+    await expect(run(writeArchiveConfig(archiveRoot, makeArchiveConfig(options, 'github')))).resolves.toBeUndefined();
+    await expect(readFile(outsideConfig, 'utf8')).resolves.toBe('outside sentinel');
+    await expect(readFile(path.join(archiveRoot, archiveConfigFilename), 'utf8')).resolves.toContain(
+      '"schemaVersion": 1'
+    );
+  });
+
+  it('does not discover an update configuration through a directory symlink outside the search root', async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), 'docsdown-config-test-'));
+    temporaryDirectories.push(parent);
+    const searchRoot = path.join(parent, 'search');
+    const outsideArchive = path.join(parent, 'outside');
+    await mkdir(searchRoot);
+    await mkdir(outsideArchive);
+    await writeFile(
+      path.join(outsideArchive, archiveConfigFilename),
+      JSON.stringify(makeArchiveConfig(options, 'github'))
+    );
+    await symlink(outsideArchive, path.join(searchRoot, 'linked'), 'junction');
+
+    const discovered = await run(discoverArchiveConfigs(searchRoot));
+
+    expect(discovered.filter((entry) => entry.ok)).toEqual([]);
   });
 });

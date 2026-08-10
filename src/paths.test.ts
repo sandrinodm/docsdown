@@ -51,6 +51,25 @@ describe('archive paths', () => {
     expect(sanitizeSegment('***')).toBe('_');
   });
 
+  it('keeps literal, encoded, and Unicode traversal attempts beneath the archive root', () => {
+    const attacks = [
+      'https://example.com/docs/../../outside',
+      'https://example.com/docs/%2e%2e/%2e%2e/outside',
+      'https://example.com/docs/%252e%252e/%252e%252e/outside',
+      'https://example.com/docs/%2f..%2foutside',
+      'https://example.com/docs/%ef%bc%8e%ef%bc%8e/outside',
+    ];
+
+    for (const attack of attacks) {
+      for (const destination of [pageFilePath(root, new URL(attack)), mediaFilePath(root, new URL(`${attack}.png`))]) {
+        const relative = path.relative(root, destination);
+        expect(relative).not.toBe('..');
+        expect(relative.startsWith(`..${path.sep}`)).toBe(false);
+        expect(path.isAbsolute(relative)).toBe(false);
+      }
+    }
+  });
+
   it('normalizes bare and parsed URLs', () => {
     expect(normalizeUrl(' example.com/docs#intro ').href).toBe('https://example.com/docs');
     const parsed = new URL('http://example.com/docs?q=1#intro');
