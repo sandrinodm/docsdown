@@ -176,6 +176,63 @@ title: API
     expect(result.markdown).toBe('![Repositories](../_media/vercel.com/docs-assets/repositories.png)\n');
     expect(result.media).toEqual([new URL('https://vercel.com/docs-assets/repositories.png')]);
   });
+
+  it('normalizes documentation section queries and per-page llms reference bases', () => {
+    const root = path.resolve('/tmp/docs');
+    const section = localizeDocument(
+      {
+        format: 'markdown',
+        source: '[Strings](https://zod.dev/api?id=strings)\n',
+        url: new URL('https://zod.dev/'),
+        file: path.join(root, 'index.md'),
+      },
+      websitePolicy(() => path.join(root, 'api.md'))
+    );
+    const llms = localizeDocument(
+      {
+        format: 'markdown',
+        source: '[Bindable](./$bindable)\n',
+        url: new URL('https://svelte.dev/docs/svelte/$props/llms.txt'),
+        file: path.join(root, 'docs', 'svelte', '$props', 'llms.txt.md'),
+      },
+      websitePolicy(() => path.join(root, 'docs', 'svelte', '$bindable.md'))
+    );
+    const directoryMarkdown = localizeDocument(
+      {
+        format: 'markdown',
+        source: '[Server](/docs/latest/Reference/Server/.md)\n',
+        url: new URL('https://fastify.dev/docs/latest.md'),
+        file: path.join(root, 'fastify.md'),
+      },
+      websitePolicy(() => path.join(root, 'Reference', 'Server', 'index.md'))
+    );
+    const rootLlms = localizeDocument(
+      {
+        format: 'markdown',
+        source: '[Home](./)\n',
+        url: new URL('https://example.com/llms.txt'),
+        file: path.join(root, 'llms.txt.md'),
+      },
+      websitePolicy(() => path.join(root, 'index.md'))
+    );
+    const emptySection = localizeDocument(
+      {
+        format: 'markdown',
+        source: '[API](https://zod.dev/api?id=)\n',
+        url: new URL('https://zod.dev/'),
+        file: path.join(root, 'index.md'),
+      },
+      websitePolicy(() => path.join(root, 'api.md'))
+    );
+
+    expect(section.markdown).toBe('[Strings](./api.md#strings)\n');
+    expect(section.links).toEqual([new URL('https://zod.dev/api#strings')]);
+    expect(llms.markdown).toBe('[Bindable](../$bindable.md)\n');
+    expect(llms.links).toEqual([new URL('https://svelte.dev/docs/svelte/$bindable')]);
+    expect(directoryMarkdown.links).toEqual([new URL('https://fastify.dev/docs/latest/Reference/Server/')]);
+    expect(rootLlms.links).toEqual([new URL('https://example.com/')]);
+    expect(emptySection.links).toEqual([new URL('https://zod.dev/api?id=')]);
+  });
 });
 
 describe('HTML conversion', () => {

@@ -155,12 +155,26 @@ const htmlProcessor = unified()
 /**
  * Resolves a reference to HTTP(S), rejecting empty, malformed, and non-downloadable schemes.
  */
-const asHttpUrl = (value: string, base: URL): URL | undefined => {
+export const resolveHttpReference = (value: string, base: URL): URL | undefined => {
   const destination = value.startsWith('`') && value.endsWith('`') ? value.slice(1, -1) : value;
   if (!destination || /^(?:data|mailto|tel|javascript):/i.test(destination)) return undefined;
   try {
-    const url = new URL(destination, base);
+    const referenceBase = new URL(base);
+    if (referenceBase.pathname.endsWith('/llms.txt')) {
+      referenceBase.pathname = referenceBase.pathname.slice(0, -'/llms.txt'.length) || '/';
+    }
+    const url = new URL(destination, referenceBase);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+    if (url.pathname.endsWith('/.md')) {
+      url.pathname = url.pathname.slice(0, -'.md'.length);
+    }
+    if (url.searchParams.size === 1 && url.searchParams.has('id')) {
+      const section = url.searchParams.get('id')?.trim();
+      if (section) {
+        url.search = '';
+        url.hash = section;
+      }
+    }
     return url;
   } catch {
     return undefined;
@@ -231,7 +245,7 @@ const firstSrcsetUrl = (value: string | undefined): string | undefined => value?
 const rewriteHtmlAttributes = (html: string, context: RewriteContext, links: Array<URL>, media: Array<URL>): string => {
   const $ = load(html, null, false);
   $('a[href]').each((_, element) => {
-    const url = asHttpUrl($(element).attr('href') as string, context.pageUrl);
+    const url = resolveHttpReference($(element).attr('href') as string, context.pageUrl);
     if (!url) return;
     links.push(url);
     const local = context.resolvePageFile(url);
@@ -245,14 +259,14 @@ const rewriteHtmlAttributes = (html: string, context: RewriteContext, links: Arr
       $(element).attr('data-src') ||
       $(element).attr('data-lazy-src') ||
       firstSrcsetUrl($(element).attr('srcset'));
-    const url = asHttpUrl(source ?? '', context.pageUrl);
+    const url = resolveHttpReference(source ?? '', context.pageUrl);
     if (!url) return;
     media.push(url);
     const local = context.resolveMediaFile(url);
     if (local) $(element).attr('src', context.relativePath(context.pageFile, local));
   });
   $('video[poster]').each((_, element) => {
-    const url = asHttpUrl($(element).attr('poster') as string, context.pageUrl);
+    const url = resolveHttpReference($(element).attr('poster') as string, context.pageUrl);
     if (!url) return;
     media.push(url);
     const local = context.resolveMediaFile(url);
@@ -276,7 +290,7 @@ const rewriteMarkdown = (source: string, context: RewriteContext): MarkdownDocum
    * Rewrites one link-like MDAST node and classifies its target for crawling or media download.
    */
   const rewriteLink = (node: { url: string }): void => {
-    const url = asHttpUrl(node.url, context.pageUrl);
+    const url = resolveHttpReference(node.url, context.pageUrl);
     if (!url) return;
     const mediaFile = context.isMediaUrl(url) ? context.resolveMediaFile(url) : undefined;
     if (mediaFile) {
@@ -292,7 +306,7 @@ const rewriteMarkdown = (source: string, context: RewriteContext): MarkdownDocum
   visit(tree, 'definition', rewriteLink);
 
   visit(tree, 'image', (node: { url: string }) => {
-    const url = asHttpUrl(node.url, context.pageUrl);
+    const url = resolveHttpReference(node.url, context.pageUrl);
     if (!url) return;
     media.push(url);
     const mediaFile = context.resolveMediaFile(url);
@@ -363,7 +377,7 @@ const htmlToMarkdown = (html: string, pageUrl: URL): { readonly markdown: string
   const $ = load(content, null, false);
 
   $('a[href]').each((_, element) => {
-    const url = asHttpUrl($(element).attr('href') as string, pageUrl);
+    const url = resolveHttpReference($(element).attr('href') as string, pageUrl);
     if (url) $(element).attr('href', url.href);
   });
   $('img').each((_, element) => {
@@ -372,16 +386,16 @@ const htmlToMarkdown = (html: string, pageUrl: URL): { readonly markdown: string
       $(element).attr('data-src') ||
       $(element).attr('data-lazy-src') ||
       firstSrcsetUrl($(element).attr('srcset'));
-    const url = source ? asHttpUrl(source, pageUrl) : undefined;
+    const url = source ? resolveHttpReference(source, pageUrl) : undefined;
     if (url) $(element).attr('src', url.href);
   });
   $('video, video source').each((_, element) => {
     const source = $(element).attr('src') || firstSrcsetUrl($(element).attr('srcset'));
-    const url = asHttpUrl(source ?? '', pageUrl);
+    const url = resolveHttpReference(source ?? '', pageUrl);
     if (url) $(element).attr('src', url.href);
   });
   $('video[poster]').each((_, element) => {
-    const url = asHttpUrl($(element).attr('poster') as string, pageUrl);
+    const url = resolveHttpReference($(element).attr('poster') as string, pageUrl);
     if (url) $(element).attr('poster', url.href);
   });
 

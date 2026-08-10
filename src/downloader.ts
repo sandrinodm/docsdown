@@ -1,8 +1,9 @@
 import * as path from 'node:path';
+import { load } from 'cheerio';
 import { Console, Effect } from 'effect';
 import * as HttpClient from 'effect/unstable/http/HttpClient';
 import { runArchive } from './archive-run.js';
-import { localizeDocument, type LocalizationPolicy } from './markdown.js';
+import { localizeDocument, resolveHttpReference, type LocalizationPolicy } from './markdown.js';
 import {
   isInScope,
   isMediaUrl,
@@ -113,6 +114,11 @@ const isMarkdownContentType = (contentType: string): boolean =>
 const looksLikeHtml = (body: string): boolean => /<!doctype\s+html|<html[\s>]|<body[\s>]/i.test(body.slice(0, 2_000));
 
 /**
+ * Detects unresolved image variables that require the rendered HTML representation.
+ */
+const hasImagePlaceholders = (body: string): boolean => /\{__img\d+\}/u.test(body);
+
+/**
  * Selects the best available representation using suffix probing, Markdown negotiation, then HTML fallback.
  *
  * A successful non-HTML plain-text suffix response is accepted because many documentation hosts serve `.md` as text/plain.
@@ -125,7 +131,8 @@ const fetchDocument = (url: URL) =>
     );
     if (
       isSuccess(suffixResponse) &&
-      (isMarkdownContentType(suffixResponse.contentType) || !looksLikeHtml(suffixResponse.body))
+      (isMarkdownContentType(suffixResponse.contentType) || !looksLikeHtml(suffixResponse.body)) &&
+      !hasImagePlaceholders(suffixResponse.body)
     ) {
       return {
         body: suffixResponse.body,
@@ -135,7 +142,11 @@ const fetchDocument = (url: URL) =>
     }
 
     const negotiatedResponse = yield* optionalRequestText(url, 'text/markdown');
-    if (isSuccess(negotiatedResponse) && isMarkdownContentType(negotiatedResponse.contentType)) {
+    if (
+      isSuccess(negotiatedResponse) &&
+      isMarkdownContentType(negotiatedResponse.contentType) &&
+      !hasImagePlaceholders(negotiatedResponse.body)
+    ) {
       return {
         body: negotiatedResponse.body,
         contentType: negotiatedResponse.contentType,
@@ -170,20 +181,64 @@ const fetchDocument = (url: URL) =>
 /**
  * Extracts crawl links from an HTML representation without replacing preferred native Markdown content.
  */
-const discoverHtmlLinks = (url: URL, pageFile: string, policy: LocalizationPolicy) =>
+const extractHtmlLinks = (html: string, base: URL): ReadonlyArray<URL> => {
+  const $ = load(html);
+  const links: Array<URL> = [];
+  $('a[href]').each((_, element) => {
+    const url = resolveHttpReference($(element).attr('href') as string, base);
+    if (url) links.push(url);
+  });
+  return links;
+};
+
+/**
+ * Requests an HTML representation and extracts its complete navigation surface.
+ */
+const discoverHtmlLinks = (url: URL) =>
   Effect.gen(function* () {
     const response = yield* optionalRequestText(url, 'text/html,application/xhtml+xml;q=0.9');
     if (!isSuccess(response) || !looksLikeHtml(response.body)) return [];
-    return localizeDocument(
-      {
-        format: 'html',
-        source: response.body,
-        url,
-        file: pageFile,
-      },
-      policy
-    ).links;
+    return extractHtmlLinks(response.body, url);
   });
+
+/**
+ * Collapses common documentation page aliases for crawl deduplication while preserving the fetched URL.
+ */
+const crawlPageKey = (url: URL): string => {
+  const canonical = new URL(url);
+  canonical.hash = '';
+  canonical.pathname =
+    canonical.pathname
+      .replace(/\/index\.(?:html?|md|markdown)$/iu, '/')
+      .replace(/\.(?:html?|md|markdown)$/iu, '')
+      .replace(/\/+$/u, '') || '/';
+  return canonical.href;
+};
+
+/**
+ * Identifies infrastructure endpoints that appear as links but do not represent documentation pages.
+ */
+const isIgnoredCrawlUrl = (url: URL): boolean => /\/cdn-cgi\/l\/email-protection\/?$/u.test(url.pathname);
+
+/**
+ * Resolves an immediate HTML meta refresh used by static documentation entry pages.
+ */
+const htmlRefreshTarget = (body: string, base: URL): URL | undefined => {
+  const $ = load(body);
+  const content = $('meta[http-equiv]')
+    .filter((_, element) => $(element).attr('http-equiv')?.toLowerCase() === 'refresh')
+    .first()
+    .attr('content');
+  const rawTarget = content?.match(/^\s*\d+(?:\.\d+)?\s*;\s*url\s*=\s*(.+?)\s*$/iu)?.[1];
+  if (!rawTarget) return undefined;
+  const target = rawTarget.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/u, '$1$2');
+  try {
+    const url = new URL(target, base);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * Serializes frontmatter scalar values using JSON's YAML-compatible string escaping.
@@ -245,7 +300,7 @@ export const downloadSite = (options: DownloadOptions) =>
     const scopePath = scopePathFor(startUrl);
     const rootDirectory = path.resolve(options.outputDirectory);
     const queue: Array<URL> = [startUrl];
-    const queued = new Set([startUrl.href]);
+    const queued = new Set([crawlPageKey(startUrl)]);
     const completed = new Set<string>();
     const localizationPolicy: LocalizationPolicy = {
       /**
@@ -292,24 +347,33 @@ export const downloadSite = (options: DownloadOptions) =>
           const processPage = (url: URL, order: number) =>
             Effect.gen(function* () {
               if (options.verbose) yield* Console.log(`Fetching ${url.href}`);
-              const source = yield* fetchDocument(url);
+              let source = yield* fetchDocument(url);
               const pageFile = pageFilePath(rootDirectory, url);
+              let localizationUrl = url;
+              if (source.strategy === 'html-conversion') {
+                const refreshTarget = htmlRefreshTarget(source.body, url);
+                if (refreshTarget && refreshTarget.href !== url.href && isInScope(refreshTarget, startUrl, scopePath)) {
+                  source = yield* fetchDocument(refreshTarget);
+                  localizationUrl = refreshTarget;
+                }
+              }
               const localized = localizeDocument(
                 {
                   format: source.strategy === 'html-conversion' ? 'html' : 'markdown',
                   source: source.body,
-                  url,
+                  url: localizationUrl,
                   file: pageFile,
                 },
                 localizationPolicy
               );
 
               let links = localized.links;
-              const hasInScopePageLink = links.some(
-                (link) => isInScope(link, startUrl, scopePath) && !isMediaUrl(link)
-              );
-              if (!options.singlePage && source.strategy !== 'html-conversion' && !hasInScopePageLink) {
-                links = [...links, ...(yield* discoverHtmlLinks(url, pageFile, localizationPolicy))];
+              if (!options.singlePage) {
+                const navigationLinks =
+                  source.strategy === 'html-conversion'
+                    ? extractHtmlLinks(source.body, localizationUrl)
+                    : yield* discoverHtmlLinks(localizationUrl);
+                links = [...navigationLinks, ...links];
               }
 
               const mediaDispatches = localized.media.map((url) => ({ url, order: nextMediaOrder++ }));
@@ -353,7 +417,7 @@ export const downloadSite = (options: DownloadOptions) =>
           while (queue.length > 0 && completed.size < options.maxPages) {
             const available = options.maxPages - completed.size;
             const batch = queue.splice(0, Math.min(options.concurrency, available));
-            for (const url of batch) completed.add(url.href);
+            for (const url of batch) completed.add(crawlPageKey(url));
             const dispatches = batch.map((url) => ({ url, order: nextPageOrder++ }));
 
             const results = yield* Effect.forEach(
@@ -382,14 +446,16 @@ export const downloadSite = (options: DownloadOptions) =>
               if (options.singlePage) continue;
               for (const link of result.page.links) {
                 link.hash = '';
+                const pageKey = crawlPageKey(link);
                 if (
                   !isInScope(link, startUrl, scopePath) ||
                   isMediaUrl(link) ||
-                  queued.has(link.href) ||
-                  completed.has(link.href)
+                  isIgnoredCrawlUrl(link) ||
+                  queued.has(pageKey) ||
+                  completed.has(pageKey)
                 )
                   continue;
-                queued.add(link.href);
+                queued.add(pageKey);
                 queue.push(link);
               }
             }

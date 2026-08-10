@@ -47,21 +47,28 @@ afterEach(async () => {
 });
 
 describe('documentation download', () => {
-  it('uses HTML navigation to discover pages when preferred Markdown omits in-scope links', async () => {
+  it('merges HTML navigation with links from preferred Markdown', async () => {
     const server = await listen((request, response) => {
       if (request.url === '/docs.md') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
-        response.end('# Documentation\n\nNative page content.\n');
+        response.end('# Documentation\n\n[Content page](/docs/content.md)\n');
         return;
       }
       if (request.url === '/docs' && request.headers.accept?.startsWith('text/html')) {
         response.writeHead(200, { 'content-type': 'text/html' });
-        response.end('<html><body><main><a href="/docs/child">Child</a></main></body></html>');
+        response.end(
+          '<html><body><nav><a href="/docs/content">Content</a><a href="/docs/child">Child</a><a href="/docs/cdn-cgi/l/email-protection#abc">Email</a></nav><main>Documentation</main></body></html>'
+        );
         return;
       }
       if (request.url === '/docs/child.md') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
         response.end('# Child\n');
+        return;
+      }
+      if (request.url === '/docs/content.md') {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        response.end('# Content\n');
         return;
       }
       response.writeHead(404).end('missing');
@@ -76,9 +83,118 @@ describe('documentation download', () => {
 
       expect(summary.pages).toEqual([
         { url: `${server.origin}/docs`, title: 'Documentation' },
+        { url: `${server.origin}/docs/content`, title: 'Content' },
         { url: `${server.origin}/docs/child`, title: 'Child' },
       ]);
+      expect(summary.failures).toEqual([]);
       expect(await readFile(path.join(summary.rootDirectory, 'docs.md'), 'utf8')).not.toContain('[Child]');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('falls back to HTML when native Markdown contains unresolved image placeholders', async () => {
+    const server = await listen((request, response) => {
+      if (request.url === '/docs.md' || request.headers.accept === 'text/markdown') {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        response.end('# Documentation\n\n<img src={__img0} />\n');
+        return;
+      }
+      if (request.url === '/docs') {
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end('<html><body><main><h1>Documentation</h1><img src="/diagram.png"></main></body></html>');
+        return;
+      }
+      if (request.url === '/diagram.png') {
+        response.writeHead(200, { 'content-type': 'image/png', 'content-length': '1' });
+        response.end(new Uint8Array([1]));
+        return;
+      }
+      response.writeHead(404).end('missing');
+    });
+    const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
+    temporaryDirectories.push(outputDirectory);
+    try {
+      const summary = await downloadSite(options(`${server.origin}/docs`, outputDirectory, { singlePage: true })).pipe(
+        Effect.provide(TestLayer),
+        Effect.runPromise
+      );
+
+      expect(summary.mediaDownloaded).toBe(1);
+      expect(await readFile(path.join(summary.rootDirectory, 'docs.md'), 'utf8')).toContain('diagram.png');
+      const manifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
+      expect(manifest.strategies).toMatchObject({ 'html-conversion': 1, 'markdown-suffix': 0 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('follows a same-origin HTML meta refresh while retaining the requested archive page', async () => {
+    const server = await listen((request, response) => {
+      if (request.url === '/en.md' || request.headers.accept === 'text/markdown') {
+        response.writeHead(404).end('missing');
+        return;
+      }
+      if (request.url === '/en/') {
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end('<!doctype html><meta http-equiv="refresh" content="0;url=/en/start/">');
+        return;
+      }
+      if (request.url === '/en/start.md') {
+        response.writeHead(404).end('missing');
+        return;
+      }
+      if (request.url === '/en/start/') {
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end(
+          '<html><body><main><h1>Start</h1><a href="/en/guide">Guide</a><a href="/en/broken/">Broken refresh</a><a href="/en/external/">External refresh</a><a href="/en/ftp/">FTP refresh</a><a href="mailto:docs@example.com">Email</a></main></body></html>'
+        );
+        return;
+      }
+      if (request.url === '/en/guide.md') {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        response.end('# Guide\n');
+        return;
+      }
+      if (request.url === '/en/broken/') {
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end(
+          '<html><head><meta http-equiv="refresh" content="0;url=http://["></head><body><main><h1>Broken refresh</h1></main></body></html>'
+        );
+        return;
+      }
+      if (request.url === '/en/external/') {
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end(
+          '<html><head><meta http-equiv="refresh" content="0;url=https://example.com/"></head><body><main><h1>External refresh</h1></main></body></html>'
+        );
+        return;
+      }
+      if (request.url === '/en/ftp/') {
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end(
+          '<html><head><meta http-equiv="refresh" content="0;url=ftp://example.com/"></head><body><main><h1>FTP refresh</h1></main></body></html>'
+        );
+        return;
+      }
+      response.writeHead(404).end('missing');
+    });
+    const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
+    temporaryDirectories.push(outputDirectory);
+    try {
+      const summary = await downloadSite(options(`${server.origin}/en/`, outputDirectory)).pipe(
+        Effect.provide(TestLayer),
+        Effect.runPromise
+      );
+
+      expect(summary.pages).toEqual([
+        { url: `${server.origin}/en/`, title: 'Start' },
+        { url: `${server.origin}/en/guide`, title: 'Guide' },
+        { url: `${server.origin}/en/broken/`, title: 'Broken refresh' },
+        { url: `${server.origin}/en/external/`, title: 'External refresh' },
+        { url: `${server.origin}/en/ftp/`, title: 'FTP refresh' },
+      ]);
+      expect(await readFile(path.join(summary.rootDirectory, 'en', 'index.md'), 'utf8')).toContain('# Start');
     } finally {
       await server.close();
     }
