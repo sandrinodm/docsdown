@@ -88,10 +88,54 @@ title: API
 [Example](./not-local.md)
 \`\`\`
 `,
-      title: 'API Reference',
+      title: 'API',
       links: [new URL('https://raw.githubusercontent.com/acme/tool/main/docs/guide.md#usage')],
       media: [new URL('https://raw.githubusercontent.com/acme/tool/main/docs/diagram.png')],
     });
+  });
+
+  it('prefers Markdown frontmatter titles and removes heading anchor annotations as a fallback', () => {
+    const withFrontmatter = localizeDocument(
+      {
+        format: 'markdown',
+        source: '---\ntitle: "Quick Start"\n---\n\n## Creating components {/*components*/}\n',
+        url: new URL('https://react.dev/learn.md'),
+        file: '/tmp/learn.md',
+      },
+      websitePolicy()
+    );
+    const withAnchor = localizeDocument(
+      {
+        format: 'markdown',
+        source: '# Plugin API {#plugin-api}\n',
+        url: new URL('https://example.com/plugin.md'),
+        file: '/tmp/plugin.md',
+      },
+      websitePolicy()
+    );
+    const withSingleQuotes = localizeDocument(
+      {
+        format: 'markdown',
+        source: "---\ntitle: 'Maintainer''s Guide'\n---\n",
+        url: new URL('https://example.com/maintainers.md'),
+        file: '/tmp/maintainers.md',
+      },
+      websitePolicy()
+    );
+    const withMalformedDoubleQuotes = localizeDocument(
+      {
+        format: 'markdown',
+        source: '---\ntitle: "Invalid \\q escape"\n---\n',
+        url: new URL('https://example.com/invalid.md'),
+        file: '/tmp/invalid.md',
+      },
+      websitePolicy()
+    );
+
+    expect(withFrontmatter.title).toBe('Quick Start');
+    expect(withAnchor.title).toBe('Plugin API');
+    expect(withSingleQuotes.title).toBe("Maintainer's Guide");
+    expect(withMalformedDoubleQuotes.title).toBe('Invalid \\q escape');
   });
 });
 

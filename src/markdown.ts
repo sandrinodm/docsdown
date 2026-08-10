@@ -21,7 +21,7 @@ export interface MarkdownDocument {
   readonly markdown: string;
 
   /**
-   * First Markdown heading, when the document supplies one.
+   * Frontmatter title or first Markdown heading, when the document supplies one.
    */
   readonly title: string | undefined;
 
@@ -182,6 +182,40 @@ const uniqueUrls = (urls: Iterable<URL>): Array<URL> => {
 };
 
 /**
+ * Removes documentation-generator annotations from a human-readable page title.
+ */
+const normalizeTitle = (value: string): string | undefined => {
+  const title = value
+    .replace(/\s*\{(?:#[^}]+|\/\*[^}]*\*\/|\/\/)\}\s*$/u, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  return title || undefined;
+};
+
+/**
+ * Reads a scalar `title` from leading YAML frontmatter without interpreting unrelated metadata.
+ */
+const frontmatterTitle = (source: string): string | undefined => {
+  const frontmatter = source.match(/^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u)?.[1];
+  const rawTitle = frontmatter?.match(/^title:[ \t]*(.*?)[ \t]*$/mu)?.[1];
+  if (!rawTitle || rawTitle === '|' || rawTitle === '>') return undefined;
+
+  let title = rawTitle;
+  if (rawTitle.startsWith('"') && rawTitle.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(rawTitle) as unknown;
+      if (typeof parsed === 'string') title = parsed;
+    } catch {
+      title = rawTitle.slice(1, -1);
+    }
+  } else if (rawTitle.startsWith("'") && rawTitle.endsWith("'")) {
+    title = rawTitle.slice(1, -1).replace(/''/gu, "'");
+  }
+
+  return normalizeTitle(title);
+};
+
+/**
  * Selects the first candidate from an HTML `srcset` attribute.
  *
  * Asset selection deliberately ignores density and width hints because every candidate represents the same content.
@@ -269,18 +303,19 @@ const rewriteMarkdown = (source: string, context: RewriteContext): MarkdownDocum
   });
 
   const firstHeading = tree.children.find((node) => node.type === 'heading');
-  let title: string | undefined;
+  let headingTitle: string | undefined;
   if (firstHeading?.type === 'heading') {
-    title =
+    headingTitle = normalizeTitle(
       firstHeading.children
         .filter((node) => node.type === 'text' || node.type === 'inlineCode')
         .map((node) => String(node.value))
-        .join('') || undefined;
+        .join('')
+    );
   }
 
   return {
     markdown: processor.stringify(tree).trimEnd() + '\n',
-    title,
+    title: frontmatterTitle(source) ?? headingTitle,
     links: uniqueUrls(links),
     media: uniqueUrls(media),
   };
