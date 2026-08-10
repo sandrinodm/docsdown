@@ -156,9 +156,10 @@ const htmlProcessor = unified()
  * Resolves a reference to HTTP(S), rejecting empty, malformed, and non-downloadable schemes.
  */
 const asHttpUrl = (value: string, base: URL): URL | undefined => {
-  if (!value || /^(?:data|mailto|tel|javascript):/i.test(value)) return undefined;
+  const destination = value.startsWith('`') && value.endsWith('`') ? value.slice(1, -1) : value;
+  if (!destination || /^(?:data|mailto|tel|javascript):/i.test(destination)) return undefined;
   try {
-    const url = new URL(value, base);
+    const url = new URL(destination, base);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
     return url;
   } catch {
@@ -312,10 +313,13 @@ const rewriteMarkdown = (source: string, context: RewriteContext): MarkdownDocum
         .join('')
     );
   }
+  const metadataTitle = frontmatterTitle(source);
+  const title =
+    metadataTitle?.toLowerCase() === 'index' ? (headingTitle ?? metadataTitle) : (metadataTitle ?? headingTitle);
 
   return {
     markdown: processor.stringify(tree).trimEnd() + '\n',
-    title: frontmatterTitle(source) ?? headingTitle,
+    title,
     links: uniqueUrls(links),
     media: uniqueUrls(media),
   };

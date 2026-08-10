@@ -131,11 +131,50 @@ title: API
       },
       websitePolicy()
     );
+    const withGenericFrontmatter = localizeDocument(
+      {
+        format: 'markdown',
+        source: '---\ntitle: index\n---\n\n# Vercel Documentation\n',
+        url: new URL('https://vercel.com/docs.md'),
+        file: '/tmp/vercel.md',
+      },
+      websitePolicy()
+    );
+    const withGenericFrontmatterOnly = localizeDocument(
+      {
+        format: 'markdown',
+        source: '---\ntitle: index\n---\n',
+        url: new URL('https://example.com/index.md'),
+        file: '/tmp/index.md',
+      },
+      websitePolicy()
+    );
 
     expect(withFrontmatter.title).toBe('Quick Start');
     expect(withAnchor.title).toBe('Plugin API');
     expect(withSingleQuotes.title).toBe("Maintainer's Guide");
     expect(withMalformedDoubleQuotes.title).toBe('Invalid \\q escape');
+    expect(withGenericFrontmatter.title).toBe('Vercel Documentation');
+    expect(withGenericFrontmatterOnly.title).toBe('index');
+  });
+
+  it('normalizes backtick-wrapped media destinations emitted by documentation hosts', () => {
+    const root = path.resolve('/tmp/vercel');
+    const result = localizeDocument(
+      {
+        format: 'markdown',
+        source: '![Repositories](`/docs-assets/repositories.png`)\n',
+        url: new URL('https://vercel.com/docs/git.md'),
+        file: path.join(root, 'docs', 'git.md'),
+      },
+      websitePolicy(
+        () => undefined,
+        (url) => path.join(root, '_media', url.hostname, url.pathname)
+      )
+    );
+
+    expect(result.markdown).toBe('![Repositories](../_media/vercel.com/docs-assets/repositories.png)\n');
+    expect(result.media).toEqual([new URL('https://vercel.com/docs-assets/repositories.png')]);
   });
 });
 

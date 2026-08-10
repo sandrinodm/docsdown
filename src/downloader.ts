@@ -168,6 +168,24 @@ const fetchDocument = (url: URL) =>
   });
 
 /**
+ * Extracts crawl links from an HTML representation without replacing preferred native Markdown content.
+ */
+const discoverHtmlLinks = (url: URL, pageFile: string, policy: LocalizationPolicy) =>
+  Effect.gen(function* () {
+    const response = yield* optionalRequestText(url, 'text/html,application/xhtml+xml;q=0.9');
+    if (!isSuccess(response) || !looksLikeHtml(response.body)) return [];
+    return localizeDocument(
+      {
+        format: 'html',
+        source: response.body,
+        url,
+        file: pageFile,
+      },
+      policy
+    ).links;
+  });
+
+/**
  * Serializes frontmatter scalar values using JSON's YAML-compatible string escaping.
  */
 const yamlString = (value: string): string => JSON.stringify(value);
@@ -286,6 +304,14 @@ export const downloadSite = (options: DownloadOptions) =>
                 localizationPolicy
               );
 
+              let links = localized.links;
+              const hasInScopePageLink = links.some(
+                (link) => isInScope(link, startUrl, scopePath) && !isMediaUrl(link)
+              );
+              if (!options.singlePage && source.strategy !== 'html-conversion' && !hasInScopePageLink) {
+                links = [...links, ...(yield* discoverHtmlLinks(url, pageFile, localizationPolicy))];
+              }
+
               const mediaDispatches = localized.media.map((url) => ({ url, order: nextMediaOrder++ }));
               yield* Effect.forEach(
                 mediaDispatches,
@@ -320,7 +346,7 @@ export const downloadSite = (options: DownloadOptions) =>
               });
               if (!options.verbose) yield* Console.log(`Downloaded ${url.href}`);
               return {
-                links: localized.links,
+                links,
               } satisfies PageResult;
             });
 

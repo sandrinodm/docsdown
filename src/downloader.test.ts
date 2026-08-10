@@ -47,6 +47,43 @@ afterEach(async () => {
 });
 
 describe('documentation download', () => {
+  it('uses HTML navigation to discover pages when preferred Markdown omits in-scope links', async () => {
+    const server = await listen((request, response) => {
+      if (request.url === '/docs.md') {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        response.end('# Documentation\n\nNative page content.\n');
+        return;
+      }
+      if (request.url === '/docs' && request.headers.accept?.startsWith('text/html')) {
+        response.writeHead(200, { 'content-type': 'text/html' });
+        response.end('<html><body><main><a href="/docs/child">Child</a></main></body></html>');
+        return;
+      }
+      if (request.url === '/docs/child.md') {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        response.end('# Child\n');
+        return;
+      }
+      response.writeHead(404).end('missing');
+    });
+    const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
+    temporaryDirectories.push(outputDirectory);
+    try {
+      const summary = await downloadSite(options(`${server.origin}/docs`, outputDirectory)).pipe(
+        Effect.provide(TestLayer),
+        Effect.runPromise
+      );
+
+      expect(summary.pages).toEqual([
+        { url: `${server.origin}/docs`, title: 'Documentation' },
+        { url: `${server.origin}/docs/child`, title: 'Child' },
+      ]);
+      expect(await readFile(path.join(summary.rootDirectory, 'docs.md'), 'utf8')).not.toContain('[Child]');
+    } finally {
+      await server.close();
+    }
+  });
+
   it('converts HTML after both Markdown probes reject their responses', async () => {
     const server = await listen((request, response) => {
       if (request.url === '/html.md') {
