@@ -29,12 +29,13 @@ describe('archive paths', () => {
   });
 
   it('keeps media grouped by its source host', () => {
-    expect(mediaFilePath(root, new URL('https://cdn.example.net/img/hero.png?v=2'))).toMatch(
-      /media\/cdn\.example\.net\/img\/hero-[a-f0-9]{10}\.png$/
-    );
-    expect(mediaFilePath(root, new URL('https://cdn.example.net/?v=2'))).toMatch(
-      /media\/cdn\.example\.net\/index-[a-f0-9]{10}$/
-    );
+    const imagePath = mediaFilePath(root, new URL('https://cdn.example.net/img/hero.png?v=2'));
+    expect(path.dirname(imagePath)).toBe(path.join(root, 'media', 'cdn.example.net', 'img'));
+    expect(path.basename(imagePath)).toMatch(/^hero-[a-f0-9]{10}\.png$/);
+
+    const rootMediaPath = mediaFilePath(root, new URL('https://cdn.example.net/?v=2'));
+    expect(path.dirname(rootMediaPath)).toBe(path.join(root, 'media', 'cdn.example.net'));
+    expect(path.basename(rootMediaPath)).toMatch(/^index-[a-f0-9]{10}$/);
   });
 
   it('creates portable relative Markdown links', () => {
