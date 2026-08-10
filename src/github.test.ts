@@ -100,7 +100,7 @@ describe('GitHub repository downloads', () => {
 
       expect(summary.rootDirectory).toBe(path.resolve(outputDirectory));
       expect(summary.pages.map((page) => page.title)).toEqual(['Guide', 'SDK API']);
-      await expect(access(path.join(summary.rootDirectory, 'src', 'internal.md'))).rejects.toThrow();
+      await expect(access(path.join(summary.rootDirectory, 'content', 'src', 'internal.md'))).rejects.toThrow();
       const manifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
       expect(manifest.scopePath).toBe('/');
       expect(manifest.scopePaths).toEqual(['docs', 'packages/sdk/docs']);
@@ -233,11 +233,11 @@ describe('GitHub repository downloads', () => {
       expect(summary).toMatchObject({ provider: 'github', pagesDownloaded: 3, mediaDownloaded: 2, truncated: false });
       expect(summary.failures).toHaveLength(4);
       expect(summary.historyManifest).toBeUndefined();
-      const readme = await readFile(path.join(summary.rootDirectory, 'README.md'), 'utf8');
-      const guide = await readFile(path.join(summary.rootDirectory, 'docs', 'guide.md'), 'utf8');
-      const component = await readFile(path.join(summary.rootDirectory, 'docs', 'component.mdx'), 'utf8');
+      const readme = await readFile(path.join(summary.rootDirectory, 'content', 'README.md'), 'utf8');
+      const guide = await readFile(path.join(summary.rootDirectory, 'content', 'docs', 'guide.md'), 'utf8');
+      const component = await readFile(path.join(summary.rootDirectory, 'content', 'docs', 'component.mdx'), 'utf8');
       expect(readme).toContain('[Guide](./docs/guide.md)');
-      expect(readme).toContain('./media/repository/assets/logo.png');
+      expect(readme).toContain('../media/repository/assets/logo.png');
       expect(guide).toContain('title: "guide"');
       expect(component).toContain('<Callout>MDX content</Callout>');
       expect(component).toContain('description: Returns { value, ...rest } safely.');

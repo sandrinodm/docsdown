@@ -180,7 +180,7 @@ const repositoryPathFromUrl = (url: URL, target: GitHubTarget, ref: string): str
  * Converts a repository path into a safe absolute page destination.
  */
 const pageDestination = (rootDirectory: string, repositoryPath: string): string =>
-  path.resolve(rootDirectory, ...repositoryPath.split('/'));
+  path.resolve(rootDirectory, 'content', ...repositoryPath.split('/'));
 
 /**
  * Places repository-owned media under a reserved subtree while preserving its original hierarchy.

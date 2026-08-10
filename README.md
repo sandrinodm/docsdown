@@ -38,8 +38,9 @@ pnpx docsdown https://orpc.unnoq.com/docs --output ./docs/orpc
 ```text
 docs/
 └── orpc/
-    ├── docs.md
-    ├── docs/
+    ├── content/
+    │   ├── docs.md
+    │   └── docs/
     ├── media/
     ├── .docsdown.json
     ├── .manifests/
@@ -280,22 +281,23 @@ The GitHub provider uses the recursive Git Trees API to discover Markdown and MD
 
 ## Output structure
 
-Website archives mirror URL paths directly beneath the exact output directory:
+Website archives mirror URL paths beneath `content/` in the exact output directory:
 
 When the site exposes LLM discovery indexes, their remote root or scope placement is preserved alongside the pages:
 
 ```text
 docs/
 └── example/
-    ├── llms.txt
-    ├── llms-full.txt
-    ├── docs.md
-    ├── docs/
-    │   ├── installation.md
+    ├── content/
     │   ├── llms.txt
     │   ├── llms-full.txt
-    │   └── guides/
-    │       └── routing.md
+    │   ├── docs.md
+    │   └── docs/
+    │       ├── installation.md
+    │       ├── llms.txt
+    │       ├── llms-full.txt
+    │       └── guides/
+    │           └── routing.md
     ├── media/
     │   ├── example.com/images/logo.svg
     │   └── cdn.example.net/videos/demo.mp4
@@ -305,14 +307,15 @@ docs/
     └── manifest.json
 ```
 
-GitHub archives preserve repository paths directly beneath their chosen output directory:
+GitHub archives preserve repository paths beneath `content/` in their chosen output directory:
 
 ```text
 docs/
 └── repository/
-    ├── README.md
-    ├── docs/
-    │   └── installation.md
+    ├── content/
+    │   ├── README.md
+    │   └── docs/
+    │       └── installation.md
     ├── media/
     │   └── repository/images/logo.svg
     ├── .docsdown.json

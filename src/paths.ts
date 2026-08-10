@@ -97,25 +97,26 @@ const withQueryHash = (filename: string, url: URL): string => {
 };
 
 /**
- * Maps a page URL to its Markdown destination while preserving the site's path hierarchy.
+ * Maps a page URL beneath `content/` while preserving the site's path hierarchy.
  *
  * Directory URLs become `index.md`; known page extensions are replaced rather than appended.
  */
 export const pageFilePath = (root: string, url: URL): string => {
+  const contentRoot = path.join(root, 'content');
   const segments = pathnameSegments(url);
-  if (segments.length === 0) return path.join(root, withQueryHash('index.md', url));
+  if (segments.length === 0) return path.join(contentRoot, withQueryHash('index.md', url));
 
   if (url.pathname.endsWith('/')) {
-    return path.join(root, ...segments, withQueryHash('index.md', url));
+    return path.join(contentRoot, ...segments, withQueryHash('index.md', url));
   }
 
   const last = segments[segments.length - 1] as string;
   if (llmsIndexFilenames.has(last.toLowerCase())) {
-    return path.join(root, ...segments.slice(0, -1), withQueryHash(last, url));
+    return path.join(contentRoot, ...segments.slice(0, -1), withQueryHash(last, url));
   }
   const extension = path.extname(last).toLowerCase();
   const filename = pageExtensions.has(extension) ? `${last.slice(0, -extension.length)}.md` : `${last}.md`;
-  return path.join(root, ...segments.slice(0, -1), withQueryHash(filename, url));
+  return path.join(contentRoot, ...segments.slice(0, -1), withQueryHash(filename, url));
 };
 
 /**

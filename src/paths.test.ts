@@ -17,18 +17,18 @@ describe('archive paths', () => {
 
   it('mirrors page paths without allowing URLs to choose filesystem segments', () => {
     expect(pageFilePath(root, new URL('https://example.com/docs/getting-started'))).toBe(
-      path.join(root, 'docs', 'getting-started.md')
+      path.join(root, 'content', 'docs', 'getting-started.md')
     );
     expect(pageFilePath(root, new URL('https://example.com/docs/guides/'))).toBe(
-      path.join(root, 'docs', 'guides', 'index.md')
+      path.join(root, 'content', 'docs', 'guides', 'index.md')
     );
-    expect(pageFilePath(root, new URL('https://example.com/'))).toBe(path.join(root, 'index.md'));
+    expect(pageFilePath(root, new URL('https://example.com/'))).toBe(path.join(root, 'content', 'index.md'));
     expect(pageFilePath(root, new URL('https://example.com/reference.html?locale=en'))).toMatch(
       /reference-[a-f0-9]{10}\.md$/
     );
-    expect(pageFilePath(root, new URL('https://example.com/llms.txt'))).toBe(path.join(root, 'llms.txt'));
+    expect(pageFilePath(root, new URL('https://example.com/llms.txt'))).toBe(path.join(root, 'content', 'llms.txt'));
     expect(pageFilePath(root, new URL('https://example.com/docs/llms-full.txt'))).toBe(
-      path.join(root, 'docs', 'llms-full.txt')
+      path.join(root, 'content', 'docs', 'llms-full.txt')
     );
   });
 
@@ -43,10 +43,10 @@ describe('archive paths', () => {
   });
 
   it('creates portable relative Markdown links', () => {
-    const from = path.join(root, 'docs', 'intro.md');
+    const from = path.join(root, 'content', 'docs', 'intro.md');
     const to = path.join(root, 'media', 'example.com', 'logo.svg');
-    expect(markdownRelativePath(from, to)).toBe('../media/example.com/logo.svg');
-    expect(markdownRelativePath(from, path.join(root, 'docs', 'next.md'))).toBe('./next.md');
+    expect(markdownRelativePath(from, to)).toBe('../../media/example.com/logo.svg');
+    expect(markdownRelativePath(from, path.join(root, 'content', 'docs', 'next.md'))).toBe('./next.md');
   });
 
   it('sanitizes malformed and non-portable URL segments', () => {

@@ -85,7 +85,7 @@ describe('documentation download', () => {
         { url: `${server.origin}/docs/child`, title: 'Child' },
       ]);
       expect(summary.failures).toEqual([]);
-      expect(await readFile(path.join(summary.rootDirectory, 'docs.md'), 'utf8')).not.toContain('[Child]');
+      expect(await readFile(path.join(summary.rootDirectory, 'content', 'docs.md'), 'utf8')).not.toContain('[Child]');
     } finally {
       await server.close();
     }
@@ -119,7 +119,7 @@ describe('documentation download', () => {
       );
 
       expect(summary.mediaDownloaded).toBe(1);
-      expect(await readFile(path.join(summary.rootDirectory, 'docs.md'), 'utf8')).toContain('diagram.png');
+      expect(await readFile(path.join(summary.rootDirectory, 'content', 'docs.md'), 'utf8')).toContain('diagram.png');
       const manifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
       expect(manifest.strategies).toMatchObject({ 'html-conversion': 1, 'markdown-suffix': 0 });
     } finally {
@@ -192,7 +192,9 @@ describe('documentation download', () => {
         { url: `${server.origin}/en/external/`, title: 'External refresh' },
         { url: `${server.origin}/en/ftp/`, title: 'FTP refresh' },
       ]);
-      expect(await readFile(path.join(summary.rootDirectory, 'en', 'index.md'), 'utf8')).toContain('# Start');
+      expect(await readFile(path.join(summary.rootDirectory, 'content', 'en', 'index.md'), 'utf8')).toContain(
+        '# Start'
+      );
     } finally {
       await server.close();
     }
@@ -229,7 +231,7 @@ describe('documentation download', () => {
       expect(summary.rootDirectory).toBe(path.resolve(outputDirectory));
       expect(summary.truncated).toBe(true);
       expect(summary.historyManifest).toBeUndefined();
-      const page = await readFile(path.join(summary.rootDirectory, 'html.md'), 'utf8');
+      const page = await readFile(path.join(summary.rootDirectory, 'content', 'html.md'), 'utf8');
       expect(page).toContain('download_strategy: "html-conversion"');
       expect(page).toContain('title: "HTML Docs"');
       const manifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
@@ -262,7 +264,7 @@ describe('documentation download', () => {
       );
 
       expect(summary.pages).toEqual([{ url: `${server.origin}/plain`, title: 'plain' }]);
-      const page = await readFile(path.join(summary.rootDirectory, 'plain.md'), 'utf8');
+      const page = await readFile(path.join(summary.rootDirectory, 'content', 'plain.md'), 'utf8');
       expect(page).toContain('content_type: "unknown"');
       expect(page).toContain('download_strategy: "markdown-content-negotiation"');
     } finally {
@@ -427,14 +429,14 @@ describe('documentation download', () => {
       ]);
       expect(manifest.files).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ path: 'docs/a-b.md', url: `${server.origin}/docs/a-b` }),
+          expect.objectContaining({ path: 'content/docs/a-b.md', url: `${server.origin}/docs/a-b` }),
           expect.objectContaining({
             path: expect.stringMatching(/media\/[^/]+\/media\/a-b\.png$/),
             url: `${server.origin}/media/a-b.png`,
           }),
         ])
       );
-      expect(await readFile(path.join(summary.rootDirectory, 'docs', 'a-b.md'), 'utf8')).toContain('# Dash');
+      expect(await readFile(path.join(summary.rootDirectory, 'content', 'docs', 'a-b.md'), 'utf8')).toContain('# Dash');
     } finally {
       log.mockRestore();
       await server.close();
@@ -521,28 +523,28 @@ describe('documentation download', () => {
         `Skipped LLM index reference ${server.origin}/outside from ${server.origin}/llms.txt: outside allowed path /docs`,
         `Skipped LLM index reference https://outside.example/docs from ${server.origin}/llms.txt: outside allowed origin ${server.origin}`,
       ]);
-      expect(await readFile(path.join(summary.rootDirectory, 'llms.txt'), 'utf8')).toBe(
+      expect(await readFile(path.join(summary.rootDirectory, 'content', 'llms.txt'), 'utf8')).toBe(
         '# Root index\n\n## Docs\n- [Root page](./docs/from-root)\n- [Outside page](/outside)\n- [External page](https://outside.example/docs)\n- [Media](/docs/image.png)\n- [Ignored infrastructure](/docs/cdn-cgi/l/email-protection)\n'
       );
-      expect(await readFile(path.join(summary.rootDirectory, 'docs', 'llms-full.txt'), 'utf8')).toBe(
+      expect(await readFile(path.join(summary.rootDirectory, 'content', 'docs', 'llms-full.txt'), 'utf8')).toBe(
         '# Scoped full index\nSource: ./from-scope-full\n\n[Content link](/docs/not-a-boundary)\n'
       );
       const manifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
       expect(manifest.files).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ path: 'llms.txt', kind: 'index', url: `${server.origin}/llms.txt` }),
+          expect.objectContaining({ path: 'content/llms.txt', kind: 'index', url: `${server.origin}/llms.txt` }),
           expect.objectContaining({
-            path: 'llms-full.txt',
+            path: 'content/llms-full.txt',
             kind: 'index',
             url: `${server.origin}/llms-full.txt`,
           }),
           expect.objectContaining({
-            path: 'docs/llms.txt',
+            path: 'content/docs/llms.txt',
             kind: 'index',
             url: `${server.origin}/docs/llms.txt`,
           }),
           expect.objectContaining({
-            path: 'docs/llms-full.txt',
+            path: 'content/docs/llms-full.txt',
             kind: 'index',
             url: `${server.origin}/docs/llms-full.txt`,
           }),
@@ -619,8 +621,8 @@ describe('documentation download', () => {
       expect(summary.mediaDownloaded).toBe(1);
       expect(summary.failures).toEqual([]);
 
-      const rootPage = await readFile(path.join(summary.rootDirectory, 'docs.md'), 'utf8');
-      const guidePage = await readFile(path.join(summary.rootDirectory, 'docs', 'guide.md'), 'utf8');
+      const rootPage = await readFile(path.join(summary.rootDirectory, 'content', 'docs.md'), 'utf8');
+      const guidePage = await readFile(path.join(summary.rootDirectory, 'content', 'docs', 'guide.md'), 'utf8');
       const manifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
 
       expect(rootPage).toContain('download_strategy: "markdown-content-negotiation"');
@@ -649,7 +651,7 @@ describe('documentation download', () => {
       }).pipe(Effect.provide(TestLayer), Effect.runPromise);
 
       expect(updated.filesRemoved).toBe(2);
-      await expect(access(path.join(summary.rootDirectory, 'docs', 'guide.md'))).rejects.toThrow();
+      await expect(access(path.join(summary.rootDirectory, 'content', 'docs', 'guide.md'))).rejects.toThrow();
       await expect(
         access(path.join(summary.rootDirectory, `media/127.0.0.1-${address.port}/media/diagram.png`))
       ).rejects.toThrow();
@@ -658,7 +660,7 @@ describe('documentation download', () => {
       const updatedManifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
       expect(updatedManifest.status).toBe('success');
       expect(updatedManifest.cleanup.removed).toEqual([
-        'docs/guide.md',
+        'content/docs/guide.md',
         `media/127.0.0.1-${address.port}/media/diagram.png`,
       ]);
     } finally {
