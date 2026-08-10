@@ -1,6 +1,6 @@
 {
   "name": "docsdown",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Download documentation websites and GitHub repositories as searchable local Markdown, including media.",
   "type": "module",
   "exports": {},
