@@ -1,0 +1,82 @@
+{
+  "name": "docsdown",
+  "version": "0.1.0",
+  "description": "Download documentation websites and GitHub repositories as searchable local Markdown, including media.",
+  "type": "module",
+  "exports": {},
+  "bin": {
+    "docsdown": "./dist/cli.js"
+  },
+  "files": [
+    "assets/docsdown-banner.webp",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "npm run format:check && npm run lint && npm run lint:jsdoc && npm run typecheck",
+    "check:fix": "npm run lint:fix && npm run format && npm run lint:jsdoc && npm run typecheck",
+    "dev": "tsx src/cli.ts",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint --deny-warnings src vitest.config.ts",
+    "lint:fix": "oxlint --fix src vitest.config.ts",
+    "lint:jsdoc": "jsdoc-lint src",
+    "prepack": "npm run build",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "npm@11.18.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sandrinodm/docsdown.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sandrinodm/docsdown/issues"
+  },
+  "homepage": "https://github.com/sandrinodm/docsdown#readme",
+  "keywords": [
+    "cli",
+    "documentation",
+    "markdown",
+    "offline",
+    "crawler",
+    "github",
+    "effect"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "dependencies": {
+    "@effect/platform-node": "^4.0.0-beta.105",
+    "cheerio": "^1.2.0",
+    "effect": "^4.0.0-beta.105",
+    "rehype-parse": "^9.0.1",
+    "rehype-remark": "^10.0.1",
+    "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-mdx": "^3.1.1",
+    "remark-parse": "^11.0.0",
+    "remark-stringify": "^11.0.0",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "jsdoc-lint": "^0.4.0",
+    "oxfmt": "^0.62.0",
+    "oxlint": "^1.77.0",
+    "release-it": "^21.0.1",
+    "tsx": "^4.23.11",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

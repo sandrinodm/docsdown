@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": ["coverage", "dist", "downloaded-docs", "src/html-to-markdown-PROTOTYPE.html"],
+  "printWidth": 120,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": true,
+  "singleQuote": true,
+  "trailingComma": "es5",
+  "sortImports": false,
+  "sortPackageJson": false,
+  "proseWrap": "preserve"
+}
