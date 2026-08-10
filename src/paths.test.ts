@@ -26,6 +26,10 @@ describe('archive paths', () => {
     expect(pageFilePath(root, new URL('https://example.com/reference.html?locale=en'))).toMatch(
       /reference-[a-f0-9]{10}\.md$/
     );
+    expect(pageFilePath(root, new URL('https://example.com/llms.txt'))).toBe(path.join(root, 'llms.txt'));
+    expect(pageFilePath(root, new URL('https://example.com/docs/llms-full.txt'))).toBe(
+      path.join(root, 'docs', 'llms-full.txt')
+    );
   });
 
   it('keeps media grouped by its source host', () => {

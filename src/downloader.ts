@@ -3,6 +3,7 @@ import { load } from 'cheerio';
 import { Console, Effect } from 'effect';
 import * as HttpClient from 'effect/unstable/http/HttpClient';
 import { runArchive } from './archive-run.js';
+import { extractLlmsIndexLinks, llmsIndexCandidates, looksLikeLlmsIndex } from './llms-index.js';
 import { localizeDocument, resolveHttpReference, type LocalizationPolicy } from './markdown.js';
 import {
   isInScope,
@@ -72,6 +73,31 @@ interface HttpTextResponse {
 }
 
 /**
+ * Successfully discovered LLM index plus the page references extracted from its structural entries.
+ */
+interface LlmsIndexResult {
+  /**
+   * Conventional index filename, retained at the corresponding archive path.
+   */
+  readonly filename: 'llms.txt' | 'llms-full.txt';
+
+  /**
+   * Canonical source URL.
+   */
+  readonly url: URL;
+
+  /**
+   * Unmodified remote content written to the archive.
+   */
+  readonly body: string;
+
+  /**
+   * Structured page references contributed to crawl discovery.
+   */
+  readonly links: ReadonlyArray<URL>;
+}
+
+/**
  * Executes one textual HTTP request with the package user agent and caller-selected accept header.
  */
 const requestText = (url: URL, accept: string) =>
@@ -101,6 +127,27 @@ const optionalRequestText = (url: URL, accept: string) =>
  */
 const isSuccess = (response: HttpTextResponse | undefined): response is HttpTextResponse =>
   response !== undefined && response.status >= 200 && response.status < 300;
+
+/**
+ * Probes optional root and selected-scope LLM indexes without turning absence into a crawl failure.
+ */
+const discoverLlmsIndexes = (startUrl: URL, scopePath: string, concurrency: number) =>
+  Effect.forEach(
+    llmsIndexCandidates(startUrl, scopePath),
+    ({ filename, url }) =>
+      optionalRequestText(url, 'text/markdown, text/plain;q=0.9').pipe(
+        Effect.map((response): LlmsIndexResult | undefined => {
+          if (!isSuccess(response) || !looksLikeLlmsIndex(response.body)) return undefined;
+          return {
+            filename,
+            url,
+            body: response.body,
+            links: extractLlmsIndexLinks(response.body, url, filename),
+          };
+        })
+      ),
+    { concurrency }
+  ).pipe(Effect.map((results) => results.filter((result): result is LlmsIndexResult => result !== undefined)));
 
 /**
  * Recognizes registered and conventional Markdown response media types.
@@ -341,6 +388,46 @@ export const downloadSite = (options: DownloadOptions) =>
           let hasSuccessfulPage = false;
           let nextPageOrder = 0;
           let nextMediaOrder = 0;
+          const warnedIndexLinks = new Set<string>();
+
+          if (!options.singlePage) {
+            const indexes = yield* discoverLlmsIndexes(startUrl, scopePath, options.concurrency);
+            for (const [order, index] of indexes.entries()) {
+              yield* archive.writeIndex({
+                url: index.url.href,
+                order,
+                dedupeKey: `website-index:${index.url.href}`,
+                destination: pageFilePath(rootDirectory, index.url),
+                content: index.body,
+              });
+              queued.add(crawlPageKey(index.url));
+              for (const link of index.links) {
+                link.hash = '';
+                const pageKey = crawlPageKey(link);
+                if (link.origin !== startUrl.origin) {
+                  if (!warnedIndexLinks.has(link.href)) {
+                    warnedIndexLinks.add(link.href);
+                    yield* Console.warn(
+                      `Skipped LLM index reference ${link.href} from ${index.url.href}: outside allowed origin ${startUrl.origin}`
+                    );
+                  }
+                  continue;
+                }
+                if (!isInScope(link, startUrl, scopePath)) {
+                  if (!warnedIndexLinks.has(link.href)) {
+                    warnedIndexLinks.add(link.href);
+                    yield* Console.warn(
+                      `Skipped LLM index reference ${link.href} from ${index.url.href}: outside allowed path ${scopePath}`
+                    );
+                  }
+                  continue;
+                }
+                if (isMediaUrl(link) || isIgnoredCrawlUrl(link) || queued.has(pageKey)) continue;
+                queued.add(pageKey);
+                queue.push(link);
+              }
+            }
+          }
 
           /**
            * Fetches and localizes one page, then submits its resources to the archive module.

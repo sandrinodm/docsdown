@@ -101,6 +101,36 @@ export interface ArchivePage {
 }
 
 /**
+ * One optional site-supplied discovery index preserved verbatim in the archive.
+ */
+export interface ArchiveIndex {
+  /**
+   * Provider discovery order used to resolve destination collisions deterministically.
+   */
+  readonly order?: number;
+
+  /**
+   * Provider-supplied resource key used instead of the destination for duplicate suppression.
+   */
+  readonly dedupeKey?: string;
+
+  /**
+   * Canonical source URL.
+   */
+  readonly url: string;
+
+  /**
+   * Absolute path selected beneath the archive root.
+   */
+  readonly destination: string;
+
+  /**
+   * Unmodified index content supplied by the documentation site.
+   */
+  readonly content: string;
+}
+
+/**
  * One remote media resource to fetch beneath the archive root.
  */
 export interface ArchiveMedia {
@@ -172,6 +202,11 @@ export interface ArchiveRecorder {
   readonly writePage: (page: ArchivePage) => Effect.Effect<boolean, ArchiveRunError, FileSystem.FileSystem>;
 
   /**
+   * Writes one site-supplied discovery index unless its destination was already claimed.
+   */
+  readonly writeIndex: (index: ArchiveIndex) => Effect.Effect<boolean, ArchiveRunError, FileSystem.FileSystem>;
+
+  /**
    * Queues one media resource unless its destination was already claimed.
    */
   readonly downloadMedia: (
@@ -217,6 +252,11 @@ export interface ArchiveRunSummary {
    * Number of media files successfully written.
    */
   readonly mediaDownloaded: number;
+
+  /**
+   * Number of optional site-supplied discovery indexes successfully written.
+   */
+  readonly indexesDownloaded: number;
 
   /**
    * Number of stale owned files removed.
@@ -317,6 +357,7 @@ export const runArchive = <E, R>(
     const destinationSemaphores = new Map<string, Semaphore.Semaphore>();
     const failures: Array<ArchiveFailure> = [];
     let mediaDownloaded = 0;
+    let indexesDownloaded = 0;
     let pageSequence = 0;
     let resourceSequence = 0;
     const mediaSemaphore = yield* Semaphore.make(options.concurrency);
@@ -399,6 +440,21 @@ export const runArchive = <E, R>(
           return true;
         }),
       /**
+       * Claims and persists one site-supplied discovery index without counting it as a documentation page.
+       */
+      writeIndex: (index) =>
+        Effect.gen(function* () {
+          const claim = yield* claimResource(index.destination, index.dedupeKey, index.order);
+          if (!claim) return false;
+          const { destination, order, sequence } = claim;
+          const file = describeArchiveFile(rootDirectory, destination, 'index', index.url, index.content);
+          yield* writeOwnedFile(destination, file, index.content, order, sequence).pipe(
+            Effect.mapError(archiveRunError('write index'))
+          );
+          indexesDownloaded += 1;
+          return true;
+        }),
+      /**
        * Claims and downloads one media request under the run concurrency limit.
        */
       downloadMedia: (media) =>
@@ -461,6 +517,7 @@ export const runArchive = <E, R>(
       scopePaths: options.scopePaths,
       pagesDownloaded: orderedPages.length,
       mediaDownloaded,
+      indexesDownloaded,
       pages: orderedPages,
       strategies,
       failures,
@@ -474,6 +531,7 @@ export const runArchive = <E, R>(
       rootDirectory,
       pagesDownloaded: orderedPages.length,
       mediaDownloaded,
+      indexesDownloaded,
       filesRemoved: manifest.removed.length,
       filesPreserved: manifest.preserved.length,
       cleanupFailures: manifest.cleanupFailures.length,

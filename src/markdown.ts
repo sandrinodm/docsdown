@@ -153,17 +153,13 @@ const htmlProcessor = unified()
   });
 
 /**
- * Resolves a reference to HTTP(S), rejecting empty, malformed, and non-downloadable schemes.
+ * Resolves one reference against an already selected base URL and applies shared documentation URL normalization.
  */
-export const resolveHttpReference = (value: string, base: URL): URL | undefined => {
+const resolveHttpReferenceAgainst = (value: string, base: URL): URL | undefined => {
   const destination = value.startsWith('`') && value.endsWith('`') ? value.slice(1, -1) : value;
   if (!destination || /^(?:data|mailto|tel|javascript):/i.test(destination)) return undefined;
   try {
-    const referenceBase = new URL(base);
-    if (referenceBase.pathname.endsWith('/llms.txt')) {
-      referenceBase.pathname = referenceBase.pathname.slice(0, -'/llms.txt'.length) || '/';
-    }
-    const url = new URL(destination, referenceBase);
+    const url = new URL(destination, base);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
     if (url.pathname.endsWith('/.md')) {
       url.pathname = url.pathname.slice(0, -'.md'.length);
@@ -179,6 +175,25 @@ export const resolveHttpReference = (value: string, base: URL): URL | undefined 
   } catch {
     return undefined;
   }
+};
+
+/**
+ * Resolves a reference using standard URL document-relative semantics.
+ *
+ * This is the correct behavior for site indexes such as `/docs/llms.txt`, where `./guide` means `/docs/guide`.
+ */
+export const resolveStandardHttpReference = (value: string, base: URL): URL | undefined =>
+  resolveHttpReferenceAgainst(value, new URL(base));
+
+/**
+ * Resolves a reference to HTTP(S), including compatibility for documentation hosts that expose per-page `llms.txt`.
+ */
+export const resolveHttpReference = (value: string, base: URL): URL | undefined => {
+  const referenceBase = new URL(base);
+  if (referenceBase.pathname.endsWith('/llms.txt')) {
+    referenceBase.pathname = referenceBase.pathname.slice(0, -'/llms.txt'.length) || '/';
+  }
+  return resolveHttpReferenceAgainst(value, referenceBase);
 };
 
 /**

@@ -34,7 +34,7 @@ export interface DownloadOptions {
   readonly outputDirectory: string;
 
   /**
-   * Maximum number of simultaneous page or media requests.
+   * Maximum number of simultaneous page, discovery index, or media requests.
    */
   readonly concurrency: number;
 

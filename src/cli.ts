@@ -30,12 +30,12 @@ const updateOutputDirectory = Flag.string('output').pipe(
 );
 
 /**
- * Shared request concurrency for page batches and media downloads.
+ * Shared request concurrency for page batches, discovery probes, and media downloads.
  */
 const concurrency = Flag.integer('concurrency').pipe(
   Flag.withAlias('c'),
-  Flag.withDefault(6),
-  Flag.withDescription('Maximum number of simultaneous page and media downloads')
+  Flag.withDefault(2),
+  Flag.withDescription('Maximum number of simultaneous page, discovery index, and media downloads')
 );
 
 /**
@@ -95,7 +95,9 @@ const include = Flag.string('include').pipe(
 const printDownloadSummary = (summary: DownloadSummary) =>
   Effect.gen(function* () {
     yield* Console.log('');
-    yield* Console.log(`Saved ${summary.pagesDownloaded} page(s) and ${summary.mediaDownloaded} media file(s).`);
+    yield* Console.log(
+      `Saved ${summary.pagesDownloaded} page(s), ${summary.indexesDownloaded} discovery index(es), and ${summary.mediaDownloaded} media file(s).`
+    );
     yield* Console.log(`Archive: ${summary.rootDirectory}`);
     yield* Console.log(`Provider: ${summary.provider}`);
     if (summary.filesRemoved > 0) {

@@ -82,6 +82,17 @@ describe('archive run', () => {
             content: '# Duplicate\n',
           });
           expect(duplicate).toBe(false);
+          yield* archive.writeIndex({
+            url: 'https://example.com/llms.txt',
+            destination: path.join(rootDirectory, 'llms.txt'),
+            content: '# Example index\n',
+          });
+          const duplicateIndex = yield* archive.writeIndex({
+            url: 'https://example.com/llms-full.txt',
+            destination: path.join(rootDirectory, 'llms.txt'),
+            content: '# Duplicate index\n',
+          });
+          expect(duplicateIndex).toBe(false);
           return { truncated: false };
         })
     ).pipe(Effect.provide(TestLayer), Effect.runPromise);
@@ -91,17 +102,23 @@ describe('archive run', () => {
       rootDirectory: path.resolve(rootDirectory),
       pagesDownloaded: 1,
       mediaDownloaded: 0,
+      indexesDownloaded: 1,
       pages: [{ url: 'https://example.com/docs', title: 'Example docs' }],
       failures: [],
       truncated: false,
     });
     expect(await readFile(path.join(rootDirectory, 'index.md'), 'utf8')).toBe('# Example docs\n');
+    expect(await readFile(path.join(rootDirectory, 'llms.txt'), 'utf8')).toBe('# Example index\n');
     const manifest = JSON.parse(await readFile(path.join(rootDirectory, 'manifest.json'), 'utf8'));
     expect(manifest).toMatchObject({
       pagesDownloaded: 1,
       mediaDownloaded: 0,
+      indexesDownloaded: 1,
       strategies: { 'markdown-suffix': 1, 'html-conversion': 0 },
-      files: [{ path: 'index.md', kind: 'page', url: 'https://example.com/docs' }],
+      files: [
+        { path: 'index.md', kind: 'page', url: 'https://example.com/docs' },
+        { path: 'llms.txt', kind: 'index', url: 'https://example.com/llms.txt' },
+      ],
       cleanup: { enabled: true, eligible: true },
     });
   });

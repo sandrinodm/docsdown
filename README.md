@@ -17,6 +17,7 @@ Archive documentation websites and GitHub repositories as searchable, offline Ma
 Documentation is often optimized for browsers, not for local search, editor navigation, offline use, or indexing by developer tools. `docsdown` turns a documentation subtree into a predictable directory of Markdown and media without requiring a site-specific adapter.
 
 - **Best available source:** Tries a `.md` URL and Markdown content negotiation before converting HTML.
+- **LLM-aware discovery:** Preserves optional `llms.txt` and `llms-full.txt` files and uses their structured references to find missing pages.
 - **Website and GitHub providers:** Crawls documentation sites or reads Markdown and MDX directly from repositories.
 - **Offline navigation:** Rewrites links between downloaded pages and localizes referenced media.
 - **Focused archives:** Downloads one page, one GitHub folder, or several selected repository folders.
@@ -91,6 +92,13 @@ The starting path defines the crawl boundary. This downloads `/docs` and pages b
 pnpx docsdown https://tanstack.com/query/latest/docs --output ./docs/tanstack-query
 ```
 
+Website crawls also probe for `llms.txt` and `llms-full.txt` at both the origin root and the selected crawl scope. Files
+that exist are preserved verbatim at their corresponding archive paths. File-list links from `llms.txt` and `Source:`
+page boundaries from `llms-full.txt` supplement ordinary link discovery; the normal same-origin and path-scope rules
+still decide which pages enter the crawl. Absolute, protocol-relative, root-relative, and document-relative references
+are resolved against the index URL. References outside the allowed origin or path are skipped with a warning, deduplicated
+by resolved URL. Discovery indexes do not count against `--max-pages`.
+
 `--output` is required and names the archive itself. docsdown does not append a hostname or repository name. Use a distinct child directory such as `./docs/orpc` for each library when maintaining several archives.
 
 ### Download one page
@@ -102,6 +110,8 @@ pnpx docsdown https://example.com/docs/getting-started \
   --single-page \
   --output ./docs/example-getting-started
 ```
+
+Single-page downloads do not probe or follow LLM discovery indexes.
 
 ### Download a large documentation site
 
@@ -226,7 +236,7 @@ Every completed download writes a token-free `.docsdown.json` beside `manifest.j
   "source": "https://github.com/owner/repository",
   "provider": "github",
   "options": {
-    "concurrency": 6,
+    "concurrency": 2,
     "maxMediaBytes": 104857600,
     "singlePage": false,
     "keepStale": false,
@@ -272,12 +282,18 @@ The GitHub provider uses the recursive Git Trees API to discover Markdown and MD
 
 Website archives mirror URL paths directly beneath the exact output directory:
 
+When the site exposes LLM discovery indexes, their remote root or scope placement is preserved alongside the pages:
+
 ```text
 docs/
 └── example/
+    ├── llms.txt
+    ├── llms-full.txt
     ├── docs.md
     ├── docs/
     │   ├── installation.md
+    │   ├── llms.txt
+    │   ├── llms-full.txt
     │   └── guides/
     │       └── routing.md
     ├── media/
@@ -304,7 +320,8 @@ docs/
     └── manifest.json
 ```
 
-Every generated Markdown document begins with provenance frontmatter:
+Every generated documentation page begins with provenance frontmatter. Preserved `llms.txt` and `llms-full.txt`
+indexes remain byte-for-byte identical to their remote sources:
 
 ```yaml
 ---
@@ -323,11 +340,11 @@ Query strings are represented by stable hash suffixes so distinct URLs cannot ov
 `manifest.json` is both the latest run report and the ownership registry used for safe cleanup. It includes:
 
 - Run status, timestamp, provider, source, and selected scopes.
-- Page and media totals.
+- Page, discovery index, and media totals; indexes remain separate from the page count.
 - The source URL and resolved title of every downloaded page.
 - Counts for each acquisition strategy.
 - Page, media, transport, and cleanup failures.
-- Every generated file's relative path, source URL, byte size, kind, and SHA-256 digest.
+- Every generated file's relative path, source URL, byte size, kind (`page`, `index`, or `media`), and SHA-256 digest.
 
 A shortened example:
 
@@ -339,6 +356,7 @@ A shortened example:
   "source": "https://example.com/docs",
   "scopePaths": ["/docs"],
   "pagesDownloaded": 2,
+  "indexesDownloaded": 2,
   "mediaDownloaded": 1,
   "pages": [
     {
@@ -384,7 +402,7 @@ Only paths previously recorded by docsdown with a valid digest are cleanup candi
 | Option                     |  Default | Description                                                                                |
 | -------------------------- | -------: | ------------------------------------------------------------------------------------------ |
 | `--output, -o <directory>` | required | Exact destination directory for this archive.                                              |
-| `--concurrency, -c <n>`    |      `6` | Maximum simultaneous page or media requests within one archive.                            |
+| `--concurrency, -c <n>`    |      `2` | Maximum simultaneous page, discovery index, or media requests within one archive.          |
 | `--max-pages <n>`          |     none | Optional ceiling for selected or crawled Markdown pages; omitted downloads the full scope. |
 | `--max-media-mb <n>`       |    `100` | Maximum size of one referenced media file.                                                 |
 | `--single-page`            |      off | Stops after one selected page; use a GitHub blob URL to select an exact repository file.   |
@@ -404,6 +422,7 @@ The Effect CLI runtime also supplies `--help`, `--version`, shell completions, l
 ## Scope and limitations
 
 - Website crawling stays on the starting origin and within the starting path subtree. Referenced media may come from external origins.
+- Root and selected-scope LLM indexes may be preserved from outside that subtree, but only their in-scope page references are crawled.
 - JavaScript-rendered content that is absent from the server response is not rendered in a browser.
 - Images and videos are downloaded only when referenced by selected Markdown or converted content.
 - GitHub branch names containing `/` are ambiguous in browser tree URLs. Prefer a commit SHA, a tag without slashes, or a raw-content URL.

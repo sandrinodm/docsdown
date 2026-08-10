@@ -7,6 +7,11 @@ import * as path from 'node:path';
 const pageExtensions = new Set(['.htm', '.html', '.md', '.markdown']);
 
 /**
+ * Conventional LLM discovery files that retain their remote filenames in an archive.
+ */
+const llmsIndexFilenames = new Set(['llms.txt', 'llms-full.txt']);
+
+/**
  * Media extensions that are downloaded as binary assets instead of crawled as pages.
  */
 export const mediaExtensions = new Set([
@@ -105,6 +110,9 @@ export const pageFilePath = (root: string, url: URL): string => {
   }
 
   const last = segments[segments.length - 1] as string;
+  if (llmsIndexFilenames.has(last.toLowerCase())) {
+    return path.join(root, ...segments.slice(0, -1), withQueryHash(last, url));
+  }
   const extension = path.extname(last).toLowerCase();
   const filename = pageExtensions.has(extension) ? `${last.slice(0, -extension.length)}.md` : `${last}.md`;
   return path.join(root, ...segments.slice(0, -1), withQueryHash(filename, url));

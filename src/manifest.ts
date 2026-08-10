@@ -6,7 +6,7 @@ import { makeOutputBoundary } from './output-boundary.js';
 /**
  * Archive resource classes with distinct cleanup and reporting semantics.
  */
-export type ArchiveFileKind = 'page' | 'media';
+export type ArchiveFileKind = 'page' | 'media' | 'index';
 
 /**
  * Immutable ownership record for one generated archive file.
@@ -18,7 +18,7 @@ export interface ArchiveFile {
   readonly path: string;
 
   /**
-   * Whether the file contains normalized documentation or downloaded media.
+   * Whether the file contains normalized documentation, a discovery index, or downloaded media.
    */
   readonly kind: ArchiveFileKind;
 
@@ -104,6 +104,11 @@ export interface ManifestRun {
    * Number of media files generated in this attempt.
    */
   readonly mediaDownloaded: number;
+
+  /**
+   * Number of site-supplied discovery index files generated in this attempt.
+   */
+  readonly indexesDownloaded: number;
 
   /**
    * Search index entries for generated pages.
@@ -227,7 +232,7 @@ const isSafeArchivePath = (value: string): boolean => {
  */
 const ArchiveFileSchema = Schema.Struct({
   path: Schema.String.check(Schema.makeFilter(isSafeArchivePath)),
-  kind: Schema.Literals(['page', 'media']),
+  kind: Schema.Literals(['page', 'media', 'index']),
   url: Schema.String,
   sha256: Schema.String.check(Schema.makeFilter((value) => /^[a-f0-9]{64}$/.test(value))),
   bytes: Schema.Number,
@@ -375,6 +380,7 @@ export const finalizeManifest = (rootDirectory: string, run: ManifestRun) =>
       downloadedAt,
       pagesDownloaded: run.pagesDownloaded,
       mediaDownloaded: run.mediaDownloaded,
+      indexesDownloaded: run.indexesDownloaded,
       pages: [...run.pages].sort((left, right) => left.url.localeCompare(right.url)),
       strategies: run.strategies,
       failures: run.failures,

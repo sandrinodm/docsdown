@@ -19,6 +19,7 @@ const makeRun = (overrides: Partial<ManifestRun> = {}): ManifestRun => ({
   scopePaths: ['/docs'],
   pagesDownloaded: 1,
   mediaDownloaded: 0,
+  indexesDownloaded: 0,
   pages: [{ url: 'https://example.com/docs', title: 'Docs' }],
   strategies: { 'markdown-suffix': 1 },
   failures: [],

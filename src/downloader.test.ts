@@ -457,6 +457,106 @@ describe('documentation download', () => {
     }
   });
 
+  it('preserves LLM indexes and uses their structured in-scope references for discovery', async () => {
+    const server = await listen((request, response) => {
+      if (request.url === '/llms.txt') {
+        response.writeHead(200, { 'content-type': 'text/plain' });
+        response.end(
+          '# Root index\n\n## Docs\n- [Root page](./docs/from-root)\n- [Outside page](/outside)\n- [External page](https://outside.example/docs)\n- [Media](/docs/image.png)\n- [Ignored infrastructure](/docs/cdn-cgi/l/email-protection)\n'
+        );
+        return;
+      }
+      if (request.url === '/llms-full.txt') {
+        response.writeHead(200, { 'content-type': 'text/plain' });
+        response.end('# Root full index\nSource: ./docs/from-root-full\n');
+        return;
+      }
+      if (request.url === '/docs/llms.txt') {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        response.end(
+          '# Scoped index\n\n## Guides\n- [Scoped page](./from-scope)\n- [Root again](/docs/from-root)\n- [Outside again](../outside)\n- [External again](https://outside.example/docs)\n'
+        );
+        return;
+      }
+      if (request.url === '/docs/llms-full.txt') {
+        response.writeHead(200, { 'content-type': 'text/plain' });
+        response.end('# Scoped full index\nSource: ./from-scope-full\n\n[Content link](/docs/not-a-boundary)\n');
+        return;
+      }
+      const titles: Readonly<Record<string, string>> = {
+        '/docs.md': 'Documentation',
+        '/docs/from-root.md': 'From root',
+        '/docs/from-root-full.md': 'From root full',
+        '/docs/from-scope.md': 'From scope',
+        '/docs/from-scope-full.md': 'From scope full',
+      };
+      const title = request.url ? titles[request.url] : undefined;
+      if (title) {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        response.end(`# ${title}\n`);
+        return;
+      }
+      response.writeHead(404).end('missing');
+    });
+    const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
+    temporaryDirectories.push(outputDirectory);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const summary = await downloadSite(options(`${server.origin}/docs`, outputDirectory)).pipe(
+        Effect.provide(TestLayer),
+        Effect.runPromise
+      );
+
+      expect(summary.pages.map((page) => page.title)).toEqual([
+        'Documentation',
+        'From root',
+        'From root full',
+        'From scope',
+        'From scope full',
+      ]);
+      expect(summary.pagesDownloaded).toBe(5);
+      expect(summary.indexesDownloaded).toBe(4);
+      expect(summary.failures).toEqual([]);
+      expect(warn.mock.calls.map(([message]) => message)).toEqual([
+        `Skipped LLM index reference ${server.origin}/outside from ${server.origin}/llms.txt: outside allowed path /docs`,
+        `Skipped LLM index reference https://outside.example/docs from ${server.origin}/llms.txt: outside allowed origin ${server.origin}`,
+      ]);
+      expect(await readFile(path.join(summary.rootDirectory, 'llms.txt'), 'utf8')).toBe(
+        '# Root index\n\n## Docs\n- [Root page](./docs/from-root)\n- [Outside page](/outside)\n- [External page](https://outside.example/docs)\n- [Media](/docs/image.png)\n- [Ignored infrastructure](/docs/cdn-cgi/l/email-protection)\n'
+      );
+      expect(await readFile(path.join(summary.rootDirectory, 'docs', 'llms-full.txt'), 'utf8')).toBe(
+        '# Scoped full index\nSource: ./from-scope-full\n\n[Content link](/docs/not-a-boundary)\n'
+      );
+      const manifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
+      expect(manifest.files).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'llms.txt', kind: 'index', url: `${server.origin}/llms.txt` }),
+          expect.objectContaining({
+            path: 'llms-full.txt',
+            kind: 'index',
+            url: `${server.origin}/llms-full.txt`,
+          }),
+          expect.objectContaining({
+            path: 'docs/llms.txt',
+            kind: 'index',
+            url: `${server.origin}/docs/llms.txt`,
+          }),
+          expect.objectContaining({
+            path: 'docs/llms-full.txt',
+            kind: 'index',
+            url: `${server.origin}/docs/llms-full.txt`,
+          }),
+        ])
+      );
+      expect(manifest.pages).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ url: expect.stringContaining('llms') })])
+      );
+    } finally {
+      warn.mockRestore();
+      await server.close();
+    }
+  });
+
   it('negotiates Markdown, probes .md pages, crawls, and localizes media', async () => {
     const image = new Uint8Array([137, 80, 78, 71]);
     let includeLinkedContent = true;
