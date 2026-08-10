@@ -5,7 +5,7 @@
   "type": "module",
   "exports": {},
   "bin": {
-    "docsdown": "./dist/cli.js"
+    "docsdown": "dist/cli.js"
   },
   "files": [
     "assets/docsdown-banner.webp",
