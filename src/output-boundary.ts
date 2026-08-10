@@ -10,11 +10,19 @@ export type OutputFileContent = string | Uint8Array;
  * Security failure raised when an archive path is unsafe or cannot be verified.
  */
 export class OutputBoundaryError extends Data.TaggedError('OutputBoundaryError')<{
-  /** Boundary operation that failed. */
+  /**
+   * Boundary operation that failed.
+   */
   readonly operation: string;
-  /** Untrusted or derived path being checked. */
+
+  /**
+   * Untrusted or derived path being checked.
+   */
   readonly filePath: string;
-  /** Human-readable failure reason. */
+
+  /**
+   * Human-readable failure reason.
+   */
   readonly message: string;
 }> {}
 

@@ -78,19 +78,35 @@ export interface ArchiveConfig {
  */
 export type DiscoveredArchiveConfig =
   | {
-      /** Indicates a usable configuration. */
+      /**
+       * Indicates a usable configuration.
+       */
       readonly ok: true;
-      /** Absolute configuration path. */
+
+      /**
+       * Absolute configuration path.
+       */
       readonly path: string;
-      /** Validated update configuration. */
+
+      /**
+       * Validated update configuration.
+       */
       readonly config: ArchiveConfig;
     }
   | {
-      /** Indicates a configuration that cannot be used. */
+      /**
+       * Indicates a configuration that cannot be used.
+       */
       readonly ok: false;
-      /** Absolute configuration path. */
+
+      /**
+       * Absolute configuration path.
+       */
       readonly path: string;
-      /** Human-readable parsing or validation error. */
+
+      /**
+       * Human-readable parsing or validation error.
+       */
       readonly message: string;
     };
 

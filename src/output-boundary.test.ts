@@ -18,11 +18,19 @@ afterEach(async () => {
 describe('output boundary', () => {
   it('rejects a filesystem adapter whose created output root is not a directory', async () => {
     const nonDirectoryFileSystem = {
-      /** Simulates successful root creation. */
+      /**
+       * Simulates successful root creation.
+       */
       makeDirectory: () => Effect.void,
-      /** Returns the requested path as its canonical location. */
+
+      /**
+       * Returns the requested path as its canonical location.
+       */
       realPath: (filePath: string) => Effect.succeed(filePath),
-      /** Reports an invalid non-directory output root. */
+
+      /**
+       * Reports an invalid non-directory output root.
+       */
       stat: () => Effect.succeed({ type: 'File' } as FileSystem.File.Info),
     } as unknown as FileSystem.FileSystem;
 

@@ -23,7 +23,7 @@
     "format:check": "oxfmt --check .",
     "lint": "oxlint --deny-warnings src vitest.config.ts",
     "lint:fix": "oxlint --fix src vitest.config.ts",
-    "lint:jsdoc": "jsdoc-lint src",
+    "lint:jsdoc": "jsdoc-lint src && node scripts/check-jsdoc-multiline.mjs",
     "prepack": "npm run build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
