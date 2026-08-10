@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
-import { Effect, FileSystem } from 'effect';
+import { Effect, FileSystem, Option, Schema } from 'effect';
 
 /**
  * Archive resource classes with distinct cleanup and reporting semantics.
@@ -222,6 +222,40 @@ const isSafeArchivePath = (value: string): boolean => {
 };
 
 /**
+ * Digest-bearing ownership record accepted from an untrusted manifest.
+ */
+const ArchiveFileSchema = Schema.Struct({
+  path: Schema.String.check(Schema.makeFilter(isSafeArchivePath)),
+  kind: Schema.Literals(['page', 'media']),
+  url: Schema.String,
+  sha256: Schema.String.check(Schema.makeFilter((value) => /^[a-f0-9]{64}$/.test(value))),
+  bytes: Schema.Number,
+});
+
+/**
+ * Current, legacy, and schema-less manifest shapes decoded from JSON.
+ *
+ * Union order preserves the current `ownedFiles` field's precedence over the legacy `files` field.
+ */
+const PreviousManifestSchema = Schema.fromJsonString(
+  Schema.Union([
+    Schema.Struct({ ownedFiles: Schema.Array(Schema.Unknown) }),
+    Schema.Struct({ files: Schema.Array(Schema.Unknown) }),
+    Schema.Struct({}),
+  ])
+);
+
+/**
+ * Safely decodes the JSON boundary without throwing for malformed manifests.
+ */
+const decodePreviousManifest = Schema.decodeUnknownOption(PreviousManifestSchema);
+
+/**
+ * Safely decodes one ownership record so invalid siblings can be ignored independently.
+ */
+const decodeArchiveFile = Schema.decodeUnknownOption(ArchiveFileSchema);
+
+/**
  * Filters unsafe ownership records, resolves duplicate paths by last value, and sorts deterministically.
  */
 const normalizedFiles = (files: ReadonlyArray<ArchiveFile>): Array<ArchiveFile> => {
@@ -233,49 +267,20 @@ const normalizedFiles = (files: ReadonlyArray<ArchiveFile>): Array<ArchiveFile> 
 };
 
 /**
- * Validates untrusted JSON as a complete, digest-bearing archive ownership record.
- */
-const asArchiveFile = (value: unknown): ArchiveFile | undefined => {
-  if (!value || typeof value !== 'object') return undefined;
-  const candidate = value as Record<string, unknown>;
-  if (
-    typeof candidate.path !== 'string' ||
-    !isSafeArchivePath(candidate.path) ||
-    (candidate.kind !== 'page' && candidate.kind !== 'media') ||
-    typeof candidate.url !== 'string' ||
-    typeof candidate.sha256 !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(candidate.sha256) ||
-    typeof candidate.bytes !== 'number'
-  ) {
-    return undefined;
-  }
-  return {
-    path: candidate.path,
-    kind: candidate.kind,
-    url: candidate.url,
-    sha256: candidate.sha256,
-    bytes: candidate.bytes,
-  };
-};
-
-/**
  * Recovers owned files from current manifests and schema-compatible historical `files` arrays.
  *
  * Invalid or pre-digest records are ignored so legacy metadata can never authorize deletion.
  */
 const parsePreviousManifest = (source: string): PreviousManifest | undefined => {
-  try {
-    const value = JSON.parse(source) as Record<string, unknown>;
-    const owned = Array.isArray(value.ownedFiles) ? value.ownedFiles : Array.isArray(value.files) ? value.files : [];
-    return {
-      ownedFiles: owned.flatMap((file) => {
-        const parsed = asArchiveFile(file);
-        return parsed ? [parsed] : [];
-      }),
-    };
-  } catch {
-    return undefined;
-  }
+  const manifest = Option.getOrUndefined(decodePreviousManifest(source));
+  if (!manifest) return undefined;
+  const owned = 'ownedFiles' in manifest ? manifest.ownedFiles : 'files' in manifest ? manifest.files : [];
+  return {
+    ownedFiles: owned.flatMap((file) => {
+      const parsed = Option.getOrUndefined(decodeArchiveFile(file));
+      return parsed ? [parsed] : [];
+    }),
+  };
 };
 
 /**

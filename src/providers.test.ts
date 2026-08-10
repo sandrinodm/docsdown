@@ -31,7 +31,7 @@ describe('provider selection', () => {
     );
   });
 
-  it('dispatches through both adapters', async () => {
+  it('validates provider selection and shared limits before adapter work', async () => {
     expect(() => downloadDocumentation({ ...options, provider: 'website', githubPaths: ['docs'] })).toThrow(
       '--include is only supported by the GitHub provider'
     );
@@ -50,5 +50,21 @@ describe('provider selection', () => {
         githubPaths: ['docs'],
       }).pipe(Effect.provide(TestLayer), Effect.runPromise)
     ).rejects.toThrow('--max-pages must be at least 1');
+    await expect(
+      downloadDocumentation({ ...options, provider: 'website', maxMediaBytes: 0 }).pipe(
+        Effect.provide(TestLayer),
+        Effect.runPromise
+      )
+    ).rejects.toThrow('--max-media-mb must be greater than 0');
+  });
+
+  it('dispatches GitHub URLs through the GitHub adapter', async () => {
+    await expect(
+      downloadDocumentation({
+        ...options,
+        provider: 'github',
+        url: 'https://github.com/acme',
+      }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    ).rejects.toThrow('GitHub URLs must include an owner and repository');
   });
 });

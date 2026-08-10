@@ -4,7 +4,7 @@ import { access, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { createServer, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { downloadSite } from './downloader.js';
 
 const TestLayer = Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerFetch);
@@ -47,19 +47,6 @@ afterEach(async () => {
 });
 
 describe('documentation download', () => {
-  it.each([
-    ['concurrency', { concurrency: 0 }, '--concurrency must be at least 1'],
-    ['page limit', { maxPages: 0 }, '--max-pages must be at least 1'],
-    ['media limit', { maxMediaBytes: 0 }, '--max-media-mb must be greater than 0'],
-  ])('rejects an invalid %s', async (_, override, message) => {
-    await expect(
-      downloadSite(options('https://example.com/docs', '/unused', override)).pipe(
-        Effect.provide(TestLayer),
-        Effect.runPromise
-      )
-    ).rejects.toThrow(message);
-  });
-
   it('converts HTML after both Markdown probes reject their responses', async () => {
     const server = await listen((request, response) => {
       if (request.url === '/html.md') {
@@ -94,6 +81,12 @@ describe('documentation download', () => {
       const page = await readFile(path.join(summary.rootDirectory, 'html.md'), 'utf8');
       expect(page).toContain('download_strategy: "html-conversion"');
       expect(page).toContain('title: "HTML Docs"');
+      const manifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
+      expect(manifest.strategies).toEqual({
+        'markdown-suffix': 0,
+        'markdown-content-negotiation': 0,
+        'html-conversion': 1,
+      });
     } finally {
       await server.close();
     }
@@ -204,10 +197,95 @@ describe('documentation download', () => {
 
       expect(summary.pagesDownloaded).toBe(2);
       expect(summary.mediaDownloaded).toBe(1);
-      expect(summary.failures).toHaveLength(4);
+      expect(summary.failures).toEqual([
+        { url: `${server.origin}/media/missing.png`, message: 'HTTP 404' },
+        { url: `${server.origin}/media/declared.png`, message: 'Media exceeds 4 byte limit' },
+        { url: `${server.origin}/media/actual.png`, message: 'Media exceeds 4 byte limit' },
+        {
+          url: `${server.origin}/docs/broken`,
+          message: `Unable to download ${server.origin}/docs/broken (HTTP 404, 404, 404)`,
+        },
+      ]);
       expect(summary.historyManifest).toBeUndefined();
-      expect(summary.failures.some((failure) => failure.url === `${server.origin}/docs/broken`)).toBe(true);
     } finally {
+      await server.close();
+    }
+  });
+
+  it('deduplicates website resources by URL rather than colliding destination', async () => {
+    const mediaRequests = new Map<string, number>();
+    const server = await listen((request, response) => {
+      if (request.url === '/docs.md') {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        response.end(
+          '# Root\n\n[Colon](/docs/a:b) [Dash](/docs/a-b)\n\n![Missing](/media/a:b.png) ![Saved](/media/a-b.png) ![Saved again](/media/a-b.png)\n'
+        );
+        return;
+      }
+      if (request.url === '/docs/a:b.md') {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        setTimeout(() => response.end('# Colon\n'), 20);
+        return;
+      }
+      if (request.url === '/docs/a-b.md') {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        response.end('# Dash\n');
+        return;
+      }
+      if (request.url === '/media/a:b.png' || request.url === '/media/a-b.png') {
+        mediaRequests.set(request.url, (mediaRequests.get(request.url) ?? 0) + 1);
+        if (request.url === '/media/a:b.png') {
+          response.writeHead(404).end('missing');
+          return;
+        }
+        response.writeHead(200, { 'content-type': 'image/png', 'content-length': '1' });
+        response.end(new Uint8Array([2]));
+        return;
+      }
+      response.writeHead(404).end('missing');
+    });
+    const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
+    temporaryDirectories.push(outputDirectory);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const summary = await downloadSite(
+        options(`${server.origin}/docs`, outputDirectory, { concurrency: 2, verbose: true })
+      ).pipe(Effect.provide(TestLayer), Effect.runPromise);
+
+      expect(summary.pagesDownloaded).toBe(3);
+      expect(summary.mediaDownloaded).toBe(1);
+      expect(summary.pages).toEqual([
+        { url: `${server.origin}/docs`, title: 'Root' },
+        { url: `${server.origin}/docs/a:b`, title: 'Colon' },
+        { url: `${server.origin}/docs/a-b`, title: 'Dash' },
+      ]);
+      expect(summary.failures).toEqual([{ url: `${server.origin}/media/a:b.png`, message: 'HTTP 404' }]);
+      expect(mediaRequests).toEqual(
+        new Map([
+          ['/media/a:b.png', 1],
+          ['/media/a-b.png', 1],
+        ])
+      );
+      expect(log).toHaveBeenCalledWith(`Skipped media ${server.origin}/media/a:b.png: HTTP 404`);
+
+      const manifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
+      expect(manifest.pages).toEqual([
+        { url: `${server.origin}/docs`, title: 'Root' },
+        { url: `${server.origin}/docs/a-b`, title: 'Dash' },
+        { url: `${server.origin}/docs/a:b`, title: 'Colon' },
+      ]);
+      expect(manifest.files).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'docs/a-b.md', url: `${server.origin}/docs/a-b` }),
+          expect.objectContaining({
+            path: expect.stringMatching(/_media\/[^/]+\/media\/a-b\.png$/),
+            url: `${server.origin}/media/a-b.png`,
+          }),
+        ])
+      );
+      expect(await readFile(path.join(summary.rootDirectory, 'docs', 'a-b.md'), 'utf8')).toContain('# Dash');
+    } finally {
+      log.mockRestore();
       await server.close();
     }
   });

@@ -3,7 +3,7 @@ import { Console, Effect, Layer } from 'effect';
 import { NodeHttpClient, NodeRuntime, NodeServices } from '@effect/platform-node';
 import { Argument, Command, Flag } from 'effect/unstable/cli';
 import { archiveConfigFilename } from './config.js';
-import type { DownloadSummary } from './downloader.js';
+import type { DownloadSummary } from './providers.js';
 import { packageVersion } from './package.js';
 import { downloadAndConfigure, updateDocumentationArchives } from './update.js';
 

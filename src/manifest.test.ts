@@ -95,6 +95,27 @@ describe('archive manifests', () => {
     expect(result.status).toBe('success');
   });
 
+  it('falls back to legacy files only when ownedFiles is not an array', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'docsdown-manifest-test-'));
+    temporaryDirectories.push(root);
+    const stalePath = path.join(root, 'legacy.md');
+    await writeFile(stalePath, 'legacy');
+    const stale = describeArchiveFile(root, stalePath, 'page', 'https://example.com/legacy', 'legacy');
+
+    await writeFile(
+      path.join(root, 'manifest.json'),
+      JSON.stringify({ ownedFiles: 'invalid', files: [{ ...stale, ignored: true }] })
+    );
+    const legacyResult = await finalize(root, makeRun());
+    expect(legacyResult.removed).toEqual(['legacy.md']);
+
+    await writeFile(stalePath, 'legacy');
+    await writeFile(path.join(root, 'manifest.json'), JSON.stringify({ ownedFiles: [], files: [stale] }));
+    const currentResult = await finalize(root, makeRun());
+    expect(currentResult.removed).toEqual([]);
+    await expect(access(stalePath)).resolves.toBeUndefined();
+  });
+
   it('keeps stale ownership when cleanup is disabled and normalizes current files', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'docsdown-manifest-test-'));
     temporaryDirectories.push(root);

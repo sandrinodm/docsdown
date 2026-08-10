@@ -9,6 +9,7 @@ import remarkParse from 'remark-parse';
 import remarkStringify from 'remark-stringify';
 import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
+import { isMediaUrl, markdownRelativePath } from './paths.js';
 
 /**
  * Normalized Markdown plus the resources discovered while parsing it.
@@ -36,9 +37,49 @@ export interface MarkdownDocument {
 }
 
 /**
+ * One source document and its archive destination.
+ */
+export interface LocalDocumentInput {
+  /**
+   * Syntax supplied by the source provider.
+   */
+  readonly format: 'html' | 'markdown' | 'mdx';
+
+  /**
+   * Unmodified source text.
+   */
+  readonly source: string;
+
+  /**
+   * Canonical source URL used to resolve relative references.
+   */
+  readonly url: URL;
+
+  /**
+   * Absolute destination of the localized Markdown file.
+   */
+  readonly file: string;
+}
+
+/**
+ * Provider-owned archive mapping consumed by document localization.
+ */
+export interface LocalizationPolicy {
+  /**
+   * Resolves an in-scope page URL to its local destination, or rejects it as out of scope.
+   */
+  readonly pageFile: (url: URL) => string | undefined;
+
+  /**
+   * Resolves a downloadable media URL to its local destination.
+   */
+  readonly mediaFile: (url: URL) => string | undefined;
+}
+
+/**
  * Archive-specific resolvers used while localizing one Markdown document.
  */
-export interface RewriteContext {
+interface RewriteContext {
   /**
    * Whether the source uses MDX syntax that must preserve JSX and expressions.
    */
@@ -190,7 +231,7 @@ const rewriteHtmlAttributes = (html: string, context: RewriteContext, links: Arr
  *
  * Fenced code is untouched because rewriting operates on semantic MDAST link, image, definition, and HTML nodes.
  */
-export const rewriteMarkdown = (source: string, context: RewriteContext): MarkdownDocument => {
+const rewriteMarkdown = (source: string, context: RewriteContext): MarkdownDocument => {
   const processor = context.mdx ? mdxProcessor : markdownProcessor;
   const tree = processor.parse(source) as Root;
   const links: Array<URL> = [];
@@ -278,7 +319,7 @@ const preferredContent = (html: string): { readonly content: string; readonly ti
  *
  * Video elements become poster images and ordinary links so their assets survive Markdown serialization.
  */
-export const htmlToMarkdown = (html: string, pageUrl: URL): { readonly markdown: string; readonly title?: string } => {
+const htmlToMarkdown = (html: string, pageUrl: URL): { readonly markdown: string; readonly title?: string } => {
   const { content, title } = preferredContent(html);
   const $ = load(content, null, false);
 
@@ -329,4 +370,26 @@ export const htmlToMarkdown = (html: string, pageUrl: URL): { readonly markdown:
     markdown: String(htmlProcessor.processSync($.root().html() as string)).trimEnd(),
     ...(title ? { title } : {}),
   };
+};
+
+/**
+ * Converts, parses, discovers, and rewrites one source document through a provider localization policy.
+ *
+ * HTML title extraction takes precedence over a converted Markdown heading, matching website archive behavior.
+ */
+export const localizeDocument = (document: LocalDocumentInput, policy: LocalizationPolicy): MarkdownDocument => {
+  const converted =
+    document.format === 'html'
+      ? htmlToMarkdown(document.source, document.url)
+      : { markdown: document.source, title: undefined };
+  const localized = rewriteMarkdown(converted.markdown, {
+    mdx: document.format === 'mdx',
+    pageUrl: document.url,
+    pageFile: document.file,
+    resolvePageFile: policy.pageFile,
+    resolveMediaFile: policy.mediaFile,
+    isMediaUrl,
+    relativePath: markdownRelativePath,
+  });
+  return converted.title ? { ...localized, title: converted.title } : localized;
 };

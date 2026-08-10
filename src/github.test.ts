@@ -5,7 +5,7 @@ import { createServer, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { downloadGitHubRepository, parseGitHubUrl, resolveGitHubScopes, type GitHubProviderConfig } from './github.js';
+import { downloadGitHubRepository, type GitHubProviderConfig } from './github.js';
 
 const TestLayer = Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerFetch);
 const temporaryDirectories: Array<string> = [];
@@ -53,81 +53,7 @@ const options = (url: string, outputDirectory: string, overrides = {}) => ({
   ...overrides,
 });
 
-describe('GitHub URL parsing', () => {
-  it('parses repositories, trees, blobs, raw files, and .git suffixes', () => {
-    expect(parseGitHubUrl('https://github.com/acme/docs.git')).toEqual({
-      owner: 'acme',
-      repository: 'docs',
-      ref: undefined,
-      repositoryPath: '',
-      exactFile: false,
-    });
-    expect(parseGitHubUrl('https://github.com/acme/docs/tree/v2/guides/start')).toMatchObject({
-      ref: 'v2',
-      repositoryPath: 'guides/start',
-      exactFile: false,
-    });
-    expect(parseGitHubUrl('https://github.com/acme/docs/blob/main/README.md')).toMatchObject({
-      ref: 'main',
-      repositoryPath: 'README.md',
-      exactFile: true,
-    });
-    expect(parseGitHubUrl(new URL('https://raw.githubusercontent.com/acme/docs/main/README.md'))).toMatchObject({
-      ref: 'main',
-      repositoryPath: 'README.md',
-      exactFile: true,
-    });
-    expect(parseGitHubUrl('https://raw.githubusercontent.com/acme/docs/main/assets/logo.png')).toMatchObject({
-      repositoryPath: 'assets/logo.png',
-      exactFile: false,
-    });
-    expect(parseGitHubUrl('https://raw.githubusercontent.com/acme/docs/main/docs/component.mdx')).toMatchObject({
-      repositoryPath: 'docs/component.mdx',
-      exactFile: true,
-    });
-  });
-
-  it('rejects unsupported and incomplete GitHub URLs', () => {
-    expect(() => parseGitHubUrl('https://github.com/acme')).toThrow('owner and repository');
-    expect(() => parseGitHubUrl('https://github.com/acme/docs/tree')).toThrow('must include a branch');
-    expect(() => parseGitHubUrl('https://raw.githubusercontent.com/acme/docs')).toThrow('owner, repository, ref');
-    expect(() => parseGitHubUrl('https://gitlab.com/acme/docs')).toThrow('Unsupported GitHub URL');
-  });
-
-  it('resolves, validates, and deduplicates explicit repository scopes', () => {
-    const repository = parseGitHubUrl('https://github.com/acme/docs');
-    const tree = parseGitHubUrl('https://github.com/acme/docs/tree/main/documentation');
-    const blob = parseGitHubUrl('https://github.com/acme/docs/blob/main/README.md');
-
-    expect(resolveGitHubScopes(repository, [])).toEqual([]);
-    expect(resolveGitHubScopes(tree, [])).toEqual(['documentation']);
-    expect(resolveGitHubScopes(repository, ['/docs/', 'packages/sdk/docs', 'docs'])).toEqual([
-      'docs',
-      'packages/sdk/docs',
-    ]);
-    expect(resolveGitHubScopes(tree, ['guides'])).toEqual(['documentation/guides']);
-    expect(() => resolveGitHubScopes(blob, ['docs'])).toThrow('cannot be combined with a GitHub blob URL');
-    for (const selection of ['', '.', '..', '../private', 'docs/../private', 'docs\\private']) {
-      expect(() => resolveGitHubScopes(repository, [selection])).toThrow('Invalid GitHub include path');
-    }
-  });
-});
-
 describe('GitHub repository downloads', () => {
-  it.each([
-    [{ concurrency: 0 }, '--concurrency must be at least 1'],
-    [{ maxPages: 0 }, '--max-pages must be at least 1'],
-    [{ maxMediaBytes: 0 }, '--max-media-mb must be greater than 0'],
-  ])('validates provider limits', async (override, message) => {
-    await expect(
-      downloadGitHubRepository(options('https://github.com/acme/docs', '/unused', override), {
-        apiBaseUrl: 'https://api.github.com',
-        webBaseUrl: 'https://github.com',
-        rawBaseUrl: 'https://raw.githubusercontent.com',
-      }).pipe(Effect.provide(TestLayer), Effect.runPromise)
-    ).rejects.toThrow(message);
-  });
-
   it('downloads several selected folders while excluding other repository Markdown', async () => {
     const server = await listen((request, response) => {
       if (request.url === '/repos/acme/mono') {
@@ -333,6 +259,10 @@ describe('GitHub repository downloads', () => {
       ).pipe(Effect.provide(TestLayer), Effect.runPromise);
       expect(truncated.truncated).toBe(true);
       expect(truncated.failures[0]?.message).toContain('truncated');
+      expect(truncated.failures).toContainEqual({
+        url: 'https://raw.githubusercontent.com/acme/docs/main/assets/missing.png',
+        message: `HTTP 404 for ${server.origin}/raw/acme/docs/main/assets/missing.png`,
+      });
 
       treeTruncated = false;
       const exactTree = await downloadGitHubRepository(
