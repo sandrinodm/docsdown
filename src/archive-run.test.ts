@@ -508,7 +508,7 @@ describe('archive run', () => {
           });
           yield* archive.downloadMedia({
             url: 'https://example.com/logo.png',
-            destination: path.join(rootDirectory, '_media', 'logo.png'),
+            destination: path.join(rootDirectory, 'media', 'logo.png'),
           });
           return { truncated: false };
         })

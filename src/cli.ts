@@ -13,12 +13,20 @@ import { downloadAndConfigure, updateDocumentationArchives } from './update.js';
 const url = Argument.string('url').pipe(Argument.withDescription('Documentation URL or path to download'));
 
 /**
- * Exact destination directory in which one documentation archive is created.
+ * Required destination directory in which one documentation archive is created.
  */
 const outputDirectory = Flag.string('output').pipe(
   Flag.withAlias('o'),
+  Flag.withDescription('Required archive destination directory')
+);
+
+/**
+ * Parent directory searched for managed archives by the update command.
+ */
+const updateOutputDirectory = Flag.string('output').pipe(
+  Flag.withAlias('o'),
   Flag.withDefault('./docs'),
-  Flag.withDescription('Archive destination, or directory searched by the update command')
+  Flag.withDescription('Directory searched recursively for managed archives')
 );
 
 /**
@@ -120,8 +128,8 @@ const downloadCommand = Command.make('docsdown', {
   verbose,
   provider,
   include,
+  outputDirectory,
 }).pipe(
-  Command.withSharedFlags({ outputDirectory }),
   Command.withHandler(
     ({ url, outputDirectory, concurrency, maxPages, maxMediaMb, singlePage, keepStale, verbose, provider, include }) =>
       Effect.gen(function* () {
@@ -150,9 +158,8 @@ const downloadCommand = Command.make('docsdown', {
 /**
  * Maintenance subcommand that refreshes all configured archives under the shared output directory.
  */
-const updateCommand = Command.make('update', {}, () =>
+const updateCommand = Command.make('update', { outputDirectory: updateOutputDirectory }, ({ outputDirectory }) =>
   Effect.gen(function* () {
-    const { outputDirectory } = yield* downloadCommand;
     const summary = yield* updateDocumentationArchives({
       outputDirectory,
       ...(process.env.GITHUB_TOKEN ? { githubToken: process.env.GITHUB_TOKEN } : {}),

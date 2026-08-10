@@ -111,13 +111,13 @@ export const pageFilePath = (root: string, url: URL): string => {
 };
 
 /**
- * Maps a media URL beneath `_media/<host>` so assets from different origins cannot collide.
+ * Maps a media URL beneath `media/<host>` so assets from different origins cannot collide.
  */
 export const mediaFilePath = (root: string, url: URL): string => {
   const segments = pathnameSegments(url);
   const rawName = segments.at(-1) ?? 'index';
   const filename = withQueryHash(rawName, url);
-  return path.join(root, '_media', sanitizeSegment(url.host), ...segments.slice(0, -1), filename);
+  return path.join(root, 'media', sanitizeSegment(url.host), ...segments.slice(0, -1), filename);
 };
 
 /**

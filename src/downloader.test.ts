@@ -429,7 +429,7 @@ describe('documentation download', () => {
         expect.arrayContaining([
           expect.objectContaining({ path: 'docs/a-b.md', url: `${server.origin}/docs/a-b` }),
           expect.objectContaining({
-            path: expect.stringMatching(/_media\/[^/]+\/media\/a-b\.png$/),
+            path: expect.stringMatching(/media\/[^/]+\/media\/a-b\.png$/),
             url: `${server.origin}/media/a-b.png`,
           }),
         ])
@@ -525,7 +525,7 @@ describe('documentation download', () => {
 
       expect(rootPage).toContain('download_strategy: "markdown-content-negotiation"');
       expect(rootPage).toContain('[Guide](./docs/guide.md)');
-      expect(rootPage).toContain(`_media/127.0.0.1-${address.port}/media/diagram.png`);
+      expect(rootPage).toContain(`media/127.0.0.1-${address.port}/media/diagram.png`);
       expect(guidePage).toContain('download_strategy: "markdown-suffix"');
       expect(manifest.strategies).toMatchObject({
         'markdown-content-negotiation': 1,
@@ -551,15 +551,15 @@ describe('documentation download', () => {
       expect(updated.filesRemoved).toBe(2);
       await expect(access(path.join(summary.rootDirectory, 'docs', 'guide.md'))).rejects.toThrow();
       await expect(
-        access(path.join(summary.rootDirectory, `_media/127.0.0.1-${address.port}/media/diagram.png`))
+        access(path.join(summary.rootDirectory, `media/127.0.0.1-${address.port}/media/diagram.png`))
       ).rejects.toThrow();
       expect(await readdir(path.join(summary.rootDirectory, '.manifests'))).toHaveLength(2);
 
       const updatedManifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
       expect(updatedManifest.status).toBe('success');
       expect(updatedManifest.cleanup.removed).toEqual([
-        `_media/127.0.0.1-${address.port}/media/diagram.png`,
         'docs/guide.md',
+        `media/127.0.0.1-${address.port}/media/diagram.png`,
       ]);
     } finally {
       server.closeAllConnections();

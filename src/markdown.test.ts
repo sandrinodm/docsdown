@@ -31,12 +31,12 @@ describe('Document localization', () => {
       {
         pageFile: (url) =>
           url.pathname.startsWith('/docs/') ? path.join(root, 'docs', `${path.basename(url.pathname)}.md`) : undefined,
-        mediaFile: (url) => path.join(root, '_media', url.host, url.pathname),
+        mediaFile: (url) => path.join(root, 'media', url.host, url.pathname),
       }
     );
 
     expect(result).toEqual({
-      markdown: '# Install\n\n[Next](./next.md#step)\n\n![](../_media/example.com/logo.svg)\n',
+      markdown: '# Install\n\n[Next](./next.md#step)\n\n![](../media/example.com/logo.svg)\n',
       title: 'Install',
       links: [new URL('https://example.com/docs/next#step')],
       media: [new URL('https://example.com/logo.svg')],
@@ -68,7 +68,7 @@ title: API
       },
       {
         pageFile: (url) => (url.pathname.endsWith('/docs/guide.md') ? path.join(root, 'docs', 'guide.md') : undefined),
-        mediaFile: (url) => path.join(root, '_media', 'repository', url.pathname.split('/').slice(4).join('/')),
+        mediaFile: (url) => path.join(root, 'media', 'repository', url.pathname.split('/').slice(4).join('/')),
       }
     );
 
@@ -82,7 +82,7 @@ title: API
 <Component mode={"compact"} />
 
 [Guide](./guide.md#usage)
-![Diagram](../_media/repository/docs/diagram.png)
+![Diagram](../media/repository/docs/diagram.png)
 
 \`\`\`md
 [Example](./not-local.md)
@@ -169,11 +169,11 @@ title: API
       },
       websitePolicy(
         () => undefined,
-        (url) => path.join(root, '_media', url.hostname, url.pathname)
+        (url) => path.join(root, 'media', url.hostname, url.pathname)
       )
     );
 
-    expect(result.markdown).toBe('![Repositories](../_media/vercel.com/docs-assets/repositories.png)\n');
+    expect(result.markdown).toBe('![Repositories](../media/vercel.com/docs-assets/repositories.png)\n');
     expect(result.media).toEqual([new URL('https://vercel.com/docs-assets/repositories.png')]);
   });
 
@@ -327,12 +327,12 @@ describe('Markdown rewriting', () => {
       },
       websitePolicy(
         (url) => (url.pathname.startsWith('/docs/') ? path.join(root, `${url.pathname}.md`) : undefined),
-        (url) => path.join(root, '_media', url.host, url.pathname)
+        (url) => path.join(root, 'media', url.host, url.pathname)
       )
     );
 
     expect(result.markdown).toContain('[Install](./install.md#requirements)');
-    expect(result.markdown).toContain('![Logo](../_media/example.com/images/logo.svg)');
+    expect(result.markdown).toContain('![Logo](../media/example.com/images/logo.svg)');
     expect(result.markdown).toContain('[Example](./do-not-rewrite)');
     expect(result.links.map((url) => url.href)).toContain('https://example.com/docs/install#requirements');
     expect(result.media.map((url) => url.href)).toContain('https://example.com/images/logo.svg');
@@ -343,7 +343,7 @@ describe('Markdown rewriting', () => {
     const pageFile = path.join(root, 'docs', 'advanced.md');
     const policy = websitePolicy(
       (url) => (url.pathname === '/docs/local' ? path.join(root, 'docs', 'local.md') : undefined),
-      (url) => (url.pathname.includes('unmapped') ? undefined : path.join(root, '_media', url.host, url.pathname))
+      (url) => (url.pathname.includes('unmapped') ? undefined : path.join(root, 'media', url.host, url.pathname))
     );
     const result = localizeDocument(
       {
@@ -384,7 +384,7 @@ describe('Markdown rewriting', () => {
     expect(result.title).toBe('Advanced API');
     expect(result.markdown).toContain('[Local][local]');
     expect(result.markdown).toContain('[local]: ./local.md#part');
-    expect(result.markdown).toContain('[Video](../_media/example.com/media/demo.mp4)');
+    expect(result.markdown).toContain('[Video](../media/example.com/media/demo.mp4)');
     expect(result.markdown).toContain('![Unmapped](/media/unmapped.png)');
     expect(result.markdown).toContain('href="./local.md#html"');
     expect(result.links.filter((url) => url.pathname === '/docs/local')).toHaveLength(3);

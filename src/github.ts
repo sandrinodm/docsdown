@@ -186,7 +186,7 @@ const pageDestination = (rootDirectory: string, repositoryPath: string): string 
  * Places repository-owned media under a reserved subtree while preserving its original hierarchy.
  */
 const repositoryMediaDestination = (rootDirectory: string, repositoryPath: string): string =>
-  path.resolve(rootDirectory, '_media', 'repository', ...repositoryPath.split('/'));
+  path.resolve(rootDirectory, 'media', 'repository', ...repositoryPath.split('/'));
 
 /**
  * Derives a searchable title when a Markdown document has no heading.

@@ -237,12 +237,12 @@ describe('GitHub repository downloads', () => {
       const guide = await readFile(path.join(summary.rootDirectory, 'docs', 'guide.md'), 'utf8');
       const component = await readFile(path.join(summary.rootDirectory, 'docs', 'component.mdx'), 'utf8');
       expect(readme).toContain('[Guide](./docs/guide.md)');
-      expect(readme).toContain('./_media/repository/assets/logo.png');
+      expect(readme).toContain('./media/repository/assets/logo.png');
       expect(guide).toContain('title: "guide"');
       expect(component).toContain('<Callout>MDX content</Callout>');
       expect(component).toContain('description: Returns { value, ...rest } safely.');
       await expect(
-        access(path.join(summary.rootDirectory, '_media', 'repository', 'assets', 'logo.png'))
+        access(path.join(summary.rootDirectory, 'media', 'repository', 'assets', 'logo.png'))
       ).resolves.toBeUndefined();
       const manifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
       expect(manifest.provider).toBe('github');

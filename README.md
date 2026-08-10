@@ -20,7 +20,7 @@ Documentation is often optimized for browsers, not for local search, editor navi
 - **Website and GitHub providers:** Crawls documentation sites or reads Markdown and MDX directly from repositories.
 - **Offline navigation:** Rewrites links between downloaded pages and localizes referenced media.
 - **Focused archives:** Downloads one page, one GitHub folder, or several selected repository folders.
-- **Repeatable updates:** Writes `.docsdown.json` automatically and refreshes every configured archive with `docsdown update`.
+- **Repeatable updates:** Writes `.docsdown.json` automatically and refreshes every configured archive with `pnpx docsdown update`.
 - **Auditable output:** Records page titles, source URLs, strategies, failures, and file digests in `manifest.json`.
 - **Conservative cleanup:** Removes stale generated files only after a complete run and preserves locally edited files.
 
@@ -29,7 +29,7 @@ Documentation is often optimized for browsers, not for local search, editor navi
 Run without installing:
 
 ```bash
-npx docsdown https://orpc.unnoq.com/docs --output ./docs/orpc
+pnpx docsdown https://orpc.unnoq.com/docs --output ./docs/orpc
 ```
 
 `--output` is the exact archive directory. The archive is written directly to `./docs/orpc`:
@@ -39,7 +39,7 @@ docs/
 └── orpc/
     ├── docs.md
     ├── docs/
-    ├── _media/
+    ├── media/
     ├── .docsdown.json
     ├── .manifests/
     └── manifest.json
@@ -54,7 +54,7 @@ rg -n "middleware" docs/orpc
 Refresh it later together with every other configured archive beneath `./docs`:
 
 ```bash
-npx docsdown update
+pnpx docsdown update
 ```
 
 There is no separate configuration step. A successful initial download creates `.docsdown.json` automatically.
@@ -66,21 +66,21 @@ There is no separate configuration step. A successful initial download creates `
 Use it without installation:
 
 ```bash
-npx docsdown <url>
+pnpx docsdown <url> --output ./docs/library-name
 ```
 
 Or install the CLI globally:
 
 ```bash
-npm install --global docsdown
-docsdown <url>
+pnpm add --global docsdown
+docsdown <url> --output ./docs/library-name
 ```
 
 ## Usage
 
 ```text
-docsdown <url> [options]
-docsdown update [--output <directory>]
+pnpx docsdown <url> --output <directory> [options]
+pnpx docsdown update [--output <directory>]
 ```
 
 ### Download a documentation website
@@ -88,25 +88,17 @@ docsdown update [--output <directory>]
 The starting path defines the crawl boundary. This downloads `/docs` and pages beneath it, but not the rest of the site:
 
 ```bash
-docsdown https://tanstack.com/query/latest/docs --output ./docs/tanstack-query
+pnpx docsdown https://tanstack.com/query/latest/docs --output ./docs/tanstack-query
 ```
 
-The output path names the archive itself; docsdown does not append a hostname or repository name. When `--output` is omitted, the exact destination defaults to `./docs`:
-
-```bash
-docsdown https://orpc.unnoq.com/docs
-```
-
-Use a distinct child directory such as `./docs/orpc` for each library when maintaining several archives.
-
-> **Upgrading from an earlier version?** `--output` previously acted as a parent directory and docsdown appended a host or repository path. Existing archives are not moved automatically. Their configs still update in place when you scan the old parent: `docsdown update --output ./downloaded-docs`.
+`--output` is required and names the archive itself. docsdown does not append a hostname or repository name. Use a distinct child directory such as `./docs/orpc` for each library when maintaining several archives.
 
 ### Download one page
 
 Use `--single-page` when you need one page and its referenced media without following page links:
 
 ```bash
-docsdown https://example.com/docs/getting-started \
+pnpx docsdown https://example.com/docs/getting-started \
   --single-page \
   --output ./docs/example-getting-started
 ```
@@ -116,7 +108,7 @@ docsdown https://example.com/docs/getting-started \
 docsdown follows the complete selected documentation scope by default. Reduce request concurrency when a large site is rate-sensitive:
 
 ```bash
-docsdown https://example.com/docs \
+pnpx docsdown https://example.com/docs \
   --concurrency 3 \
   --output ./docs/example
 ```
@@ -128,7 +120,7 @@ Use `--max-pages` only when you intentionally want to stop after a fixed number 
 GitHub URLs automatically select the GitHub provider. Markdown and MDX files retain their repository-relative paths.
 
 ```bash
-docsdown https://github.com/sindresorhus/p-map --output ./docs/p-map
+pnpx docsdown https://github.com/sindresorhus/p-map --output ./docs/p-map
 ```
 
 Repository, tree, blob, and `raw.githubusercontent.com` URLs are supported.
@@ -138,7 +130,7 @@ Repository, tree, blob, and `raw.githubusercontent.com` URLs are supported.
 Point to a GitHub tree URL:
 
 ```bash
-docsdown https://github.com/owner/repository/tree/main/docs --output ./docs/repository
+pnpx docsdown https://github.com/owner/repository/tree/main/docs --output ./docs/repository
 ```
 
 Only Markdown and MDX beneath `docs` are selected. Referenced assets can still be downloaded from elsewhere in the repository.
@@ -148,7 +140,7 @@ Only Markdown and MDX beneath `docs` are selected. Referenced assets can still b
 Repeat `--include` to create one focused archive without downloading every Markdown file in the repository:
 
 ```bash
-docsdown https://github.com/owner/repository \
+pnpx docsdown https://github.com/owner/repository \
   --include docs \
   --include packages/sdk/docs \
   --include examples/guides \
@@ -158,7 +150,7 @@ docsdown https://github.com/owner/repository \
 When the URL already selects a tree, include paths are relative to that tree:
 
 ```bash
-docsdown https://github.com/owner/repository/tree/main/docs \
+pnpx docsdown https://github.com/owner/repository/tree/main/docs \
   --include guides \
   --include reference \
   --output ./docs/repository
@@ -171,13 +163,13 @@ The complete include list describes the desired archive. On a later successful r
 A blob URL selects exactly one file and its referenced media:
 
 ```bash
-docsdown https://github.com/owner/repository/blob/main/README.md --output ./docs/repository-readme
+pnpx docsdown https://github.com/owner/repository/blob/main/README.md --output ./docs/repository-readme
 ```
 
 Raw-content URLs work as well:
 
 ```bash
-docsdown https://raw.githubusercontent.com/owner/repository/main/README.md --output ./docs/repository-readme
+pnpx docsdown https://raw.githubusercontent.com/owner/repository/main/README.md --output ./docs/repository-readme
 ```
 
 ### Download a private GitHub repository
@@ -185,7 +177,7 @@ docsdown https://raw.githubusercontent.com/owner/repository/main/README.md --out
 Provide a token at runtime:
 
 ```bash
-GITHUB_TOKEN=github_pat_... docsdown https://github.com/owner/private-repository \
+GITHUB_TOKEN=github_pat_... pnpx docsdown https://github.com/owner/private-repository \
   --output ./docs/private-repository
 ```
 
@@ -198,8 +190,8 @@ Providing a token is also useful for higher GitHub API rate limits when archivin
 Provider selection defaults to `auto`. Override it when a URL is routed through a proxy or needs non-standard handling:
 
 ```bash
-docsdown https://github.com/owner/repository --provider github --output ./docs/repository
-docsdown https://github.com/owner/repository/tree/main/docs \
+pnpx docsdown https://github.com/owner/repository --provider github --output ./docs/repository
+pnpx docsdown https://github.com/owner/repository/tree/main/docs \
   --provider website \
   --output ./docs/rendered-repository
 ```
@@ -211,7 +203,7 @@ Valid values are `auto`, `website`, and `github`. The GitHub provider still requ
 Images and videos are downloaded only when referenced by selected content. Skip individual files larger than a chosen size:
 
 ```bash
-docsdown https://example.com/docs --max-media-mb 25 --output ./docs/example
+pnpx docsdown https://example.com/docs --max-media-mb 25 --output ./docs/example
 ```
 
 The limit is checked against both the declared response size and the bytes actually received.
@@ -221,7 +213,7 @@ The limit is checked against both the declared response size and the bytes actua
 Normal output reports completed pages. Use `--verbose` to see probes, page requests, and skipped media:
 
 ```bash
-docsdown https://example.com/docs --verbose --output ./docs/example
+pnpx docsdown https://example.com/docs --verbose --output ./docs/example
 ```
 
 ## Updating archives
@@ -247,13 +239,13 @@ Every completed download writes a token-free `.docsdown.json` beside `manifest.j
 Refresh all configured archives beneath `./docs`:
 
 ```bash
-docsdown update
+pnpx docsdown update
 ```
 
 Refresh archives beneath another parent directory:
 
 ```bash
-docsdown update --output ./reference
+pnpx docsdown update --output ./reference
 ```
 
 Configuration files are discovered recursively. Archives update sequentially so their individual concurrency limits do not multiply unexpectedly. Invalid configs and failed or partial downloads are reported after every other archive has been attempted, and the command exits unsuccessfully when any update remains incomplete.
@@ -261,7 +253,7 @@ Configuration files are discovered recursively. Archives update sequentially so 
 Private repositories still require a runtime token:
 
 ```bash
-GITHUB_TOKEN=github_pat_... docsdown update
+GITHUB_TOKEN=github_pat_... pnpx docsdown update
 ```
 
 ## How content is acquired
@@ -274,7 +266,7 @@ The website provider tries three strategies in order for every page:
 
 This ordering preserves first-party Markdown whenever a site exposes it, including the Markdown content-negotiation convention pioneered by Cloudflare. HTML conversion remains the broad compatibility fallback.
 
-The GitHub provider uses the recursive Git Trees API to discover Markdown and MDX, then downloads raw file contents. Relative Markdown links are rewritten when their targets are part of the selection. Referenced repository media is stored beneath `_media/repository`; external media is grouped by host.
+The GitHub provider uses the recursive Git Trees API to discover Markdown and MDX, then downloads raw file contents. Relative Markdown links are rewritten when their targets are part of the selection. Referenced repository media is stored beneath `media/repository`; external media is grouped by host.
 
 ## Output structure
 
@@ -288,7 +280,7 @@ docs/
     │   ├── installation.md
     │   └── guides/
     │       └── routing.md
-    ├── _media/
+    ├── media/
     │   ├── example.com/images/logo.svg
     │   └── cdn.example.net/videos/demo.mp4
     ├── .docsdown.json
@@ -305,7 +297,7 @@ docs/
     ├── README.md
     ├── docs/
     │   └── installation.md
-    ├── _media/
+    ├── media/
     │   └── repository/images/logo.svg
     ├── .docsdown.json
     ├── .manifests/
@@ -391,7 +383,7 @@ Only paths previously recorded by docsdown with a valid digest are cleanup candi
 
 | Option                     |  Default | Description                                                                                |
 | -------------------------- | -------: | ------------------------------------------------------------------------------------------ |
-| `--output, -o <directory>` | `./docs` | Exact destination directory for this archive.                                              |
+| `--output, -o <directory>` | required | Exact destination directory for this archive.                                              |
 | `--concurrency, -c <n>`    |      `6` | Maximum simultaneous page or media requests within one archive.                            |
 | `--max-pages <n>`          |     none | Optional ceiling for selected or crawled Markdown pages; omitted downloads the full scope. |
 | `--max-media-mb <n>`       |    `100` | Maximum size of one referenced media file.                                                 |
@@ -407,7 +399,7 @@ Only paths previously recorded by docsdown with a valid digest are cleanup candi
 | -------------------------- | -------: | ---------------------------------------------------------- |
 | `--output, -o <directory>` | `./docs` | Directory searched recursively for `.docsdown.json` files. |
 
-The Effect CLI runtime also supplies `--help`, `--version`, shell completions, log-level selection, and interactive wizard mode. Run `docsdown --help` or `docsdown update --help` for generated help.
+The Effect CLI runtime also supplies `--help`, `--version`, shell completions, log-level selection, and interactive wizard mode. Run `pnpx docsdown --help` or `pnpx docsdown update --help` for generated help.
 
 ## Scope and limitations
 
@@ -422,19 +414,19 @@ The Effect CLI runtime also supplies `--help`, `--version`, shell completions, l
 
 ## Development
 
-Use Node.js 24 and the npm version declared in `package.json` for development and production.
+Use Node.js 24 or newer and pnpm for local development.
 
 ```bash
-npm install
-npm run check
-npm run test:coverage
-npm run build
+pnpm install
+pnpm run check
+pnpm run test:coverage
+pnpm run build
 ```
 
 Run the CLI directly from source:
 
 ```bash
-npm run dev -- https://example.com/docs --output ./docs/example
+pnpm run dev -- https://example.com/docs --output ./docs/example
 ```
 
 Oxfmt owns formatting, Oxlint owns static analysis, `jsdoc-lint` validates declaration documentation, and TypeScript runs in strict mode. Tests enforce 100% statement, branch, function, and line coverage.
@@ -454,7 +446,7 @@ Every filesystem mutation passes through one canonical output boundary:
 - Page, media, manifest, history, and configuration writes use a temporary file followed by an atomic rename. Final
   symlinks and hard links are not followed for writes.
 - Stale cleanup resolves and revalidates owned files before reading or removing them.
-- `docsdown update` does not accept configurations reached through a directory symlink outside its search root.
+- `pnpx docsdown update` does not accept configurations reached through a directory symlink outside its search root.
 
 The path passed to `--output` is the trust anchor. If that path is itself a symlink, its canonical target becomes the
 archive root. The boundary protects against remote path input and pre-existing redirected paths. As with other portable

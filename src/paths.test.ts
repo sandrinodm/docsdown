@@ -30,17 +30,17 @@ describe('archive paths', () => {
 
   it('keeps media grouped by its source host', () => {
     expect(mediaFilePath(root, new URL('https://cdn.example.net/img/hero.png?v=2'))).toMatch(
-      /_media\/cdn\.example\.net\/img\/hero-[a-f0-9]{10}\.png$/
+      /media\/cdn\.example\.net\/img\/hero-[a-f0-9]{10}\.png$/
     );
     expect(mediaFilePath(root, new URL('https://cdn.example.net/?v=2'))).toMatch(
-      /_media\/cdn\.example\.net\/index-[a-f0-9]{10}$/
+      /media\/cdn\.example\.net\/index-[a-f0-9]{10}$/
     );
   });
 
   it('creates portable relative Markdown links', () => {
     const from = path.join(root, 'docs', 'intro.md');
-    const to = path.join(root, '_media', 'example.com', 'logo.svg');
-    expect(markdownRelativePath(from, to)).toBe('../_media/example.com/logo.svg');
+    const to = path.join(root, 'media', 'example.com', 'logo.svg');
+    expect(markdownRelativePath(from, to)).toBe('../media/example.com/logo.svg');
     expect(markdownRelativePath(from, path.join(root, 'docs', 'next.md'))).toBe('./next.md');
   });
 
