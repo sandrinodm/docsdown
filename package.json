@@ -73,7 +73,7 @@
     "@types/node": "^26.2.0",
     "@vitest/coverage-v8": "^4.1.10",
     "jsdoc-lint": "^0.4.0",
-    "oxfmt": "^0.62.0",
+    "oxfmt": "^0.63.0",
     "oxlint": "^1.77.0",
     "release-it": "^21.0.1",
     "tsx": "^4.23.11",
