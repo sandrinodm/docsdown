@@ -4,7 +4,7 @@ docsdown is a Node.js CLI that archives a documentation website subtree or GitHu
 
 ## Validation
 
-Run `npm run check`, `npm run test:coverage`, and `npm run build` before committing. Oxfmt owns formatting and Oxlint owns linting. Do not introduce Biome, ESLint, or Prettier configuration alongside them.
+Run `npm run check`, `npm run test:coverage`, and `npm run build` before committing. Vite+ (`vp`) owns formatting, linting, tests, and builds; its Oxfmt, Oxlint, Vitest, and tsdown settings live in `vite.config.ts`. Do not introduce Biome, ESLint, Prettier, or standalone tool configuration alongside it.
 
 ## Commits
 

@@ -4,7 +4,7 @@ import { access, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { createServer, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 import { downloadSite } from './downloader.js';
 
 const TestLayer = Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerFetch);

@@ -4,7 +4,7 @@ import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vite-plus/test';
 import { downloadGitHubRepository, type GitHubProviderConfig } from './github.js';
 
 const TestLayer = Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerFetch);

@@ -15,18 +15,14 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "check": "npm run format:check && npm run lint && npm run lint:jsdoc && npm run typecheck",
-    "check:fix": "npm run lint:fix && npm run format && npm run lint:jsdoc && npm run typecheck",
+    "build": "vp pack",
+    "check": "vp check && npm run lint:jsdoc && npm run typecheck",
+    "check:fix": "vp check --fix && npm run lint:jsdoc && npm run typecheck",
     "dev": "tsx src/cli.ts",
-    "format": "oxfmt --write .",
-    "format:check": "oxfmt --check .",
-    "lint": "oxlint --deny-warnings src vitest.config.ts",
-    "lint:fix": "oxlint --fix src vitest.config.ts",
     "lint:jsdoc": "jsdoc-lint src && node scripts/check-jsdoc-multiline.mjs",
     "prepack": "npm run build",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "test": "vp test run",
+    "test:coverage": "vp test run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
@@ -43,7 +39,9 @@
     },
     "release-it": {
       "undici": "^7.30.0"
-    }
+    },
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.0.0",
+    "vitest": "5.0.1"
   },
   "license": "MIT",
   "repository": {
@@ -83,13 +81,12 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
-    "@vitest/coverage-v8": "^5.0.3",
+    "@vitest/coverage-v8": "5.0.1",
     "jsdoc-lint": "^0.6.0",
-    "oxfmt": "^0.71.0",
-    "oxlint": "^1.86.0",
     "release-it": "^21.1.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.3"
+    "vitest": "5.0.1",
+    "vite-plus": "1.0.0"
   }
 }

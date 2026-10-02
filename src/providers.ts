@@ -76,7 +76,7 @@ export interface DocumentationDownloadOptions extends DownloadOptions {
   /**
    * Provider override or automatic selection.
    */
-  readonly provider: ProviderSelection | string;
+  readonly provider: string;
 
   /**
    * GitHub token used only for GitHub REST requests.
@@ -101,7 +101,7 @@ const validateDownloadOptions = (options: DownloadOptions): Error | undefined =>
 /**
  * Selects a provider explicitly or detects GitHub browser and raw-content URLs.
  */
-export const selectProvider = (url: string, selection: ProviderSelection | string): ProviderKind => {
+export const selectProvider = (url: string, selection: string): ProviderKind => {
   if (selection === 'website' || selection === 'github') return selection;
   if (selection !== 'auto') throw new Error(`Unknown provider "${selection}"; expected auto, website, or github`);
   const hostname = normalizeUrl(url).hostname.toLowerCase();

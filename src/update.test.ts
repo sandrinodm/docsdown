@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vite-plus/test';
 import { archiveConfigFilename, makeArchiveConfig, writeArchiveConfig } from './config.js';
 import type { DocumentationDownloadOptions } from './providers.js';
 import { downloadAndConfigure, updateDocumentationArchives } from './update.js';

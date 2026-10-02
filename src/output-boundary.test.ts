@@ -3,7 +3,7 @@ import { Effect, FileSystem } from 'effect';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vite-plus/test';
 import { makeOutputBoundary, OutputBoundaryError } from './output-boundary.js';
 
 /**

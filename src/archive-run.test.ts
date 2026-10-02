@@ -5,7 +5,7 @@ import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:f
 import { createServer, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vite-plus/test';
 import { ArchiveRunError, runArchive } from './archive-run.js';
 
 /**

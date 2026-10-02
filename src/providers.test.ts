@@ -1,6 +1,6 @@
 import { NodeHttpClient, NodeServices } from '@effect/platform-node';
 import { Effect, Layer } from 'effect';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
 import { downloadDocumentation, selectProvider } from './providers.js';
 
 const TestLayer = Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerFetch);

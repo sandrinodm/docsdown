@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
 import { extractLlmsIndexLinks, llmsIndexCandidates, looksLikeLlmsIndex } from './llms-index.js';
 
 describe('LLM discovery indexes', () => {

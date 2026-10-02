@@ -24,8 +24,8 @@ tooling. npm 12 blocks unapproved dependency install scripts by default.
 
 - Keep changes focused and add tests for behavior changes.
 - Place each `*.test.ts` beside the module it exercises.
-- Oxfmt owns formatting. Do not hand-format around it.
-- Oxlint owns static analysis, with TypeScript strict mode as a separate correctness check.
+- Vite+ (`vp`) runs formatting (Oxfmt), type-aware linting (Oxlint), tests (Vitest), and the package build (tsdown). Configure them in `vite.config.ts`.
+- Do not hand-format around `vp fmt`. TypeScript strict mode runs as a separate correctness check.
 - Document exported declarations and meaningful internal helpers with concise multiline JSDoc. Describe behavior and invariants rather than repeating TypeScript types.
 - Keep network tests deterministic. Use a local server or explicit fixtures instead of depending on a public website.
 - Do not commit downloaded documentation, coverage output, build output, or package tarballs.

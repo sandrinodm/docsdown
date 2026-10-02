@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
 import { parseGitHubUrl, planGitHubSnapshot, resolveGitHubScopes } from './github-snapshot.js';
 
 describe('GitHub URL interpretation', () => {
