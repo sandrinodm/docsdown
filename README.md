@@ -4,13 +4,74 @@
 
 # docsdown
 
+[![npm version](https://img.shields.io/npm/v/docsdown.svg)](https://www.npmjs.com/package/docsdown)
 [![CI](https://github.com/sandrinodm/docsdown/actions/workflows/ci.yml/badge.svg)](https://github.com/sandrinodm/docsdown/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D24-339933?logo=nodedotjs&logoColor=white)](package.json)
 
 Archive documentation websites and GitHub repositories as searchable, offline Markdown, including referenced images and videos.
 
+```bash
+pnpx docsdown https://orpc.unnoq.com/docs --output ./docs/orpc
+```
+
 `docsdown` prefers first-party Markdown, converts HTML only when necessary, preserves the source hierarchy, rewrites links for local navigation, and records every page in a machine-readable manifest. Each archive is reproducible and can be refreshed later with one command.
+
+## Contents
+
+- [Quick start](#quick-start)
+- [Why docsdown?](#why-docsdown)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Updating archives](#updating-archives)
+- [Using with AI coding agents](#using-with-ai-coding-agents)
+- [How content is acquired](#how-content-is-acquired)
+- [Output structure](#output-structure)
+- [CLI reference](#cli-reference)
+- [Scope and limitations](#scope-and-limitations)
+- [Contributing](#contributing)
+
+## Quick start
+
+Download a documentation website or GitHub repository. `--output` is the exact archive directory:
+
+```console
+$ pnpx docsdown https://github.com/sindresorhus/p-map --output ./docs/p-map
+Downloaded .github/security.md
+Downloaded readme.md
+
+Saved 2 page(s), 0 discovery index(es), and 0 media file(s).
+Archive: /path/to/project/docs/p-map
+Provider: github
+```
+
+The archive contains Markdown pages, localized media when pages reference any, and bookkeeping files:
+
+```text
+docs/
+└── p-map/
+    ├── content/
+    │   ├── readme.md
+    │   └── .github/
+    │       └── security.md
+    ├── .docsdown.json
+    ├── .manifests/
+    └── manifest.json
+```
+
+Search it with any local tool:
+
+```bash
+rg -n "concurrency" docs/p-map
+```
+
+Refresh every archive beneath `./docs` later:
+
+```bash
+pnpx docsdown update
+```
+
+There is no separate configuration step. A successful initial download creates `.docsdown.json` automatically.
 
 ## Why docsdown?
 
@@ -21,51 +82,13 @@ Documentation is often optimized for browsers, not for local search, editor navi
 - **Website and GitHub providers:** Crawls documentation sites or reads Markdown and MDX directly from repositories.
 - **Offline navigation:** Rewrites links between downloaded pages and localizes referenced media.
 - **Focused archives:** Downloads one page, one GitHub folder, or several selected repository folders.
-- **Repeatable updates:** Writes `.docsdown.json` automatically and refreshes every configured archive with `pnpx docsdown update`.
+- **Repeatable updates:** Writes `.docsdown.json` automatically and refreshes every configured archive with `docsdown update`.
 - **Auditable output:** Records page titles, source URLs, strategies, failures, and file digests in `manifest.json`.
 - **Conservative cleanup:** Removes stale generated files only after a complete run and preserves locally edited files.
 
-## Quick start
-
-Run without installing:
-
-```bash
-pnpx docsdown https://orpc.unnoq.com/docs --output ./docs/orpc
-```
-
-`--output` is the exact archive directory. The archive is written directly to `./docs/orpc`:
-
-```text
-docs/
-└── orpc/
-    ├── content/
-    │   ├── docs.md
-    │   └── docs/
-    ├── media/
-    ├── .docsdown.json
-    ├── .manifests/
-    └── manifest.json
-```
-
-Search it with any local tool:
-
-```bash
-rg -n "middleware" docs/orpc
-```
-
-Refresh it later together with every other configured archive beneath `./docs`:
-
-```bash
-pnpx docsdown update
-```
-
-There is no separate configuration step. A successful initial download creates `.docsdown.json` automatically.
-
 ## Installation
 
-`docsdown` requires Node.js 24 or newer.
-
-Use it without installation:
+`docsdown` requires Node.js 24 or newer. Run it without installing:
 
 ```bash
 pnpx docsdown <url> --output ./docs/library-name
@@ -81,9 +104,11 @@ docsdown <url> --output ./docs/library-name
 ## Usage
 
 ```text
-pnpx docsdown <url> --output <directory> [options]
-pnpx docsdown update [--output <directory>]
+docsdown <url> --output <directory> [options]
+docsdown update [--output <directory>]
 ```
+
+The examples below use `pnpx`.
 
 ### Download a documentation website
 
@@ -93,14 +118,9 @@ The starting path defines the crawl boundary. This downloads `/docs` and pages b
 pnpx docsdown https://tanstack.com/query/latest/docs --output ./docs/tanstack-query
 ```
 
-Website crawls also probe for `llms.txt` and `llms-full.txt` at both the origin root and the selected crawl scope. Files
-that exist are preserved verbatim at their corresponding archive paths. File-list links from `llms.txt` and `Source:`
-page boundaries from `llms-full.txt` supplement ordinary link discovery; the normal same-origin and path-scope rules
-still decide which pages enter the crawl. Absolute, protocol-relative, root-relative, and document-relative references
-are resolved against the index URL. References outside the allowed origin or path are skipped with a warning, deduplicated
-by resolved URL. Discovery indexes do not count against `--max-pages`.
-
 `--output` is required and names the archive itself. docsdown does not append a hostname or repository name. Use a distinct child directory such as `./docs/orpc` for each library when maintaining several archives.
+
+Website crawls also use `llms.txt` and `llms-full.txt` indexes when a site publishes them. See [LLM discovery indexes](#llm-discovery-indexes).
 
 ### Download one page
 
@@ -247,13 +267,7 @@ Every completed download writes a token-free `.docsdown.json` beside `manifest.j
 }
 ```
 
-Refresh all configured archives beneath `./docs`:
-
-```bash
-pnpx docsdown update
-```
-
-Refresh archives beneath another parent directory:
+`docsdown update` refreshes every configured archive beneath `./docs`. Pass `--output` to search another parent directory:
 
 ```bash
 pnpx docsdown update --output ./reference
@@ -265,6 +279,18 @@ Private repositories still require a runtime token:
 
 ```bash
 GITHUB_TOKEN=github_pat_... pnpx docsdown update
+```
+
+## Using with AI coding agents
+
+The [use-local-docs skill](skills/use-local-docs/SKILL.md) helps coding agents discover and use downloaded documentation while developing, debugging, and reviewing a project. It covers focused searches, version compatibility, archive coverage, and fallback to official sources.
+
+The skill is not included in the npm package. Copy it from this repository into your agent's skills directory, for example for Claude Code:
+
+```bash
+git clone --depth 1 https://github.com/sandrinodm/docsdown.git /tmp/docsdown
+mkdir -p .claude/skills
+cp -r /tmp/docsdown/skills/use-local-docs .claude/skills/
 ```
 
 ## How content is acquired
@@ -279,11 +305,15 @@ This ordering preserves first-party Markdown whenever a site exposes it, includi
 
 The GitHub provider uses the recursive Git Trees API to discover Markdown and MDX, then downloads raw file contents. Relative Markdown links are rewritten when their targets are part of the selection. Referenced repository media is stored beneath `media/repository`; external media is grouped by host.
 
+### LLM discovery indexes
+
+Website crawls probe for `llms.txt` and `llms-full.txt` at both the origin root and the selected crawl scope. Files that exist are preserved verbatim at their corresponding archive paths. File-list links from `llms.txt` and `Source:` page boundaries from `llms-full.txt` supplement ordinary link discovery; the normal same-origin and path-scope rules still decide which pages enter the crawl.
+
+Absolute, protocol-relative, root-relative, and document-relative references are resolved against the index URL. References outside the allowed origin or path are skipped with a warning, deduplicated by resolved URL. Discovery indexes do not count against `--max-pages`.
+
 ## Output structure
 
-Website archives mirror URL paths beneath `content/` in the exact output directory:
-
-When the site exposes LLM discovery indexes, their remote root or scope placement is preserved alongside the pages:
+Website archives mirror URL paths beneath `content/` in the exact output directory. When the site exposes LLM discovery indexes, their remote root or scope placement is preserved alongside the pages:
 
 ```text
 docs/
@@ -323,8 +353,7 @@ docs/
     └── manifest.json
 ```
 
-Every generated documentation page begins with provenance frontmatter. Preserved `llms.txt` and `llms-full.txt`
-indexes remain byte-for-byte identical to their remote sources:
+Every generated documentation page begins with provenance frontmatter. Preserved `llms.txt` and `llms-full.txt` indexes remain byte-for-byte identical to their remote sources:
 
 ```yaml
 ---
@@ -338,65 +367,7 @@ download_strategy: 'markdown-content-negotiation'
 
 Query strings are represented by stable hash suffixes so distinct URLs cannot overwrite each other.
 
-## Manifests
-
-`manifest.json` is both the latest run report and the ownership registry used for safe cleanup. It includes:
-
-- Run status, timestamp, provider, source, and selected scopes.
-- Page, discovery index, and media totals; indexes remain separate from the page count.
-- The source URL and resolved title of every downloaded page.
-- Counts for each acquisition strategy.
-- Page, media, transport, and cleanup failures.
-- Every generated file's relative path, source URL, byte size, kind (`page`, `index`, or `media`), and SHA-256 digest.
-
-A shortened example:
-
-```json
-{
-  "schemaVersion": 1,
-  "status": "success",
-  "provider": "website",
-  "source": "https://example.com/docs",
-  "scopePaths": ["/docs"],
-  "pagesDownloaded": 2,
-  "indexesDownloaded": 2,
-  "mediaDownloaded": 1,
-  "pages": [
-    {
-      "url": "https://example.com/docs",
-      "title": "Documentation"
-    },
-    {
-      "url": "https://example.com/docs/installation",
-      "title": "Installation"
-    }
-  ],
-  "strategies": {
-    "markdown-suffix": 1,
-    "markdown-content-negotiation": 0,
-    "html-conversion": 1
-  },
-  "failures": [],
-  "truncated": false
-}
-```
-
-Every fully successful run is also copied to `.manifests/<run-id>.json`. These immutable snapshots provide a history that can be compared or indexed independently. Partial attempts update `manifest.json` but do not create a successful history snapshot.
-
-## Safe stale-file cleanup
-
-After a complete update, files owned by the previous archive but absent from the new result become stale. Cleanup is intentionally conservative:
-
-| Situation                  | Behavior                                                        |
-| -------------------------- | --------------------------------------------------------------- |
-| Complete, failure-free run | Removes stale files whose recorded digest still matches.        |
-| Page or media failure      | Records a partial run and removes nothing.                      |
-| `--max-pages` reached      | Records a truncated run and removes nothing.                    |
-| Stale file edited locally  | Preserves the file and records it in the manifest.              |
-| `--keep-stale` used        | Retains stale files while preserving ownership for a later run. |
-| File absent already        | Treats it as safely removed.                                    |
-
-Only paths previously recorded by docsdown with a valid digest are cleanup candidates. `.docsdown.json`, `manifest.json`, and `.manifests/` are never cleanup targets.
+`manifest.json` records the run status, every downloaded page and media file with its SHA-256 digest, acquisition strategy counts, and failures. Successful runs are also snapshotted to `.manifests/`. Stale files are removed only after a complete, failure-free run, and files you edited locally are preserved. See [docs/internals.md](docs/internals.md) for the manifest format and cleanup rules.
 
 ## CLI reference
 
@@ -420,7 +391,7 @@ Only paths previously recorded by docsdown with a valid digest are cleanup candi
 | -------------------------- | -------: | ---------------------------------------------------------- |
 | `--output, -o <directory>` | `./docs` | Directory searched recursively for `.docsdown.json` files. |
 
-The Effect CLI runtime also supplies `--help`, `--version`, shell completions, log-level selection, and interactive wizard mode. Run `pnpx docsdown --help` or `pnpx docsdown update --help` for generated help.
+The Effect CLI runtime also supplies `--help`, `--version`, shell completions, log-level selection, and interactive wizard mode. Run `docsdown --help` or `docsdown update --help` for generated help.
 
 ## Scope and limitations
 
@@ -432,50 +403,17 @@ The Effect CLI runtime also supplies `--help`, `--version`, shell completions, l
 - GitHub recursive tree responses are limited by GitHub to 100,000 entries and 7 MB. A truncated response creates a partial manifest and never triggers cleanup.
 - Cross-scope links remain remote when their target page is not part of the archive.
 - Sites may block or rate-limit automated requests. Reduce `--concurrency` when appropriate and respect the site's terms and robots policy.
-- `docsdown` is currently pre-1.0 and uses Effect 4's experimental CLI API.
-
-## Development
-
-Use Node.js 24 or newer and pnpm for local development.
-
-```bash
-pnpm install
-pnpm run check
-pnpm run test:coverage
-pnpm run build
-```
-
-Run the CLI directly from source:
-
-```bash
-pnpm run dev -- https://example.com/docs --output ./docs/example
-```
-
-Oxfmt owns formatting, Oxlint owns static analysis, `jsdoc-lint` validates declaration documentation, and TypeScript runs in strict mode. Tests enforce 100% statement, branch, function, and line coverage.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete contribution and release workflow.
+- `docsdown` is currently pre-1.0.
 
 ## Security
 
-Remote documentation is treated as untrusted input. Page URLs, GitHub tree entries, media references, manifest records,
-and update configurations cannot select a file outside the chosen archive root.
-
-Every filesystem mutation passes through one canonical output boundary:
-
-- Literal, percent-encoded, double-encoded, and Unicode dot segments cannot escape the archive.
-- Existing parent directories are resolved before use. A symlink or redirected parent that leaves the archive is
-  rejected.
-- Page, media, manifest, history, and configuration writes use a temporary file followed by an atomic rename. Final
-  symlinks and hard links are not followed for writes.
-- Stale cleanup resolves and revalidates owned files before reading or removing them.
-- `pnpx docsdown update` does not accept configurations reached through a directory symlink outside its search root.
-
-The path passed to `--output` is the trust anchor. If that path is itself a symlink, its canonical target becomes the
-archive root. The boundary protects against remote path input and pre-existing redirected paths. As with other portable
-filesystem tools, the output tree should not be concurrently mutated by an untrusted local process while a run is in
-progress.
+Remote documentation is treated as untrusted input: page URLs, repository paths, media references, and manifest records cannot write outside the directory passed to `--output`. See [docs/internals.md](docs/internals.md#filesystem-safety) for the full filesystem boundary.
 
 Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, quality checks, and the release workflow.
 
 ## License
 

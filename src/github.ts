@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { Console, Effect, Schema } from 'effect';
-import * as HttpClient from 'effect/unstable/http/HttpClient';
+import * as HttpClient from 'effect/http/HttpClient';
 import { runArchive } from './archive-run.js';
 import type { DownloadOptions, DownloadSummary } from './providers.js';
 import {

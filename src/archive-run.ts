@@ -1,5 +1,5 @@
 import { Data, Effect, Semaphore, type FileSystem } from 'effect';
-import * as HttpClient from 'effect/unstable/http/HttpClient';
+import * as HttpClient from 'effect/http/HttpClient';
 import * as path from 'node:path';
 import { describeArchiveFile, finalizeManifest, type ArchiveFile } from './manifest.js';
 import { makeOutputBoundary } from './output-boundary.js';

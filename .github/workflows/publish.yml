@@ -29,6 +29,9 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
+      - name: Install declared npm version
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+
       - name: Install dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
 

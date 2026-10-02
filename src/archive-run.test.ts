@@ -1,6 +1,6 @@
 import { NodeHttpClient, NodeServices } from '@effect/platform-node';
 import { Effect, FileSystem, Layer } from 'effect';
-import * as HttpClient from 'effect/unstable/http/HttpClient';
+import * as HttpClient from 'effect/http/HttpClient';
 import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';

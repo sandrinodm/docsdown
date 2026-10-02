@@ -4,9 +4,10 @@ Thanks for helping improve docsdown.
 
 ## Setup
 
-Use Node.js 24 and the npm version declared in `package.json`.
+Use Node.js 24.15 or newer and the npm version declared in `package.json`.
 
 ```bash
+npm install --global npm@12.2.0
 npm install
 npm run check
 npm test
@@ -15,6 +16,9 @@ npm run build
 ```
 
 Run `npm pack --dry-run` before changing package metadata or published files. Run the CLI from source with `npm run dev -- <url>`.
+
+The `allowScripts` policy in `package.json` permits the esbuild and fsevents install scripts required by development
+tooling. npm 12 blocks unapproved dependency install scripts by default.
 
 ## Quality standards
 

@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { load } from 'cheerio';
 import { Console, Effect } from 'effect';
-import * as HttpClient from 'effect/unstable/http/HttpClient';
+import * as HttpClient from 'effect/http/HttpClient';
 import { runArchive } from './archive-run.js';
 import { extractLlmsIndexLinks, llmsIndexCandidates, looksLikeLlmsIndex } from './llms-index.js';
 import { localizeDocument, resolveHttpReference, type LocalizationPolicy } from './markdown.js';

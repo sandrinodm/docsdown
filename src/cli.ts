@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Console, Effect, Layer, Option } from 'effect';
 import { NodeHttpClient, NodeRuntime, NodeServices } from '@effect/platform-node';
-import { Argument, Command, Flag } from 'effect/unstable/cli';
+import { Argument, Command, Flag } from 'effect/cli';
 import { archiveConfigFilename } from './config.js';
 import type { DownloadSummary } from './providers.js';
 import { packageVersion } from './package.js';
@@ -10,12 +10,12 @@ import { downloadAndConfigure, updateDocumentationArchives } from './update.js';
 /**
  * Required starting URL accepted by the root command.
  */
-const url = Argument.string('url').pipe(Argument.withDescription('Documentation URL or path to download'));
+const url = Argument.String('url').pipe(Argument.withDescription('Documentation URL or path to download'));
 
 /**
  * Required destination directory in which one documentation archive is created.
  */
-const outputDirectory = Flag.string('output').pipe(
+const outputDirectory = Flag.String('output').pipe(
   Flag.withAlias('o'),
   Flag.withDescription('Required archive destination directory')
 );
@@ -23,7 +23,7 @@ const outputDirectory = Flag.string('output').pipe(
 /**
  * Parent directory searched for managed archives by the update command.
  */
-const updateOutputDirectory = Flag.string('output').pipe(
+const updateOutputDirectory = Flag.String('output').pipe(
   Flag.withAlias('o'),
   Flag.withDefault('./docs'),
   Flag.withDescription('Directory searched recursively for managed archives')
@@ -32,7 +32,7 @@ const updateOutputDirectory = Flag.string('output').pipe(
 /**
  * Shared request concurrency for page batches, discovery probes, and media downloads.
  */
-const concurrency = Flag.integer('concurrency').pipe(
+const concurrency = Flag.Int('concurrency').pipe(
   Flag.withAlias('c'),
   Flag.withDefault(2),
   Flag.withDescription('Maximum number of simultaneous page, discovery index, and media downloads')
@@ -41,7 +41,7 @@ const concurrency = Flag.integer('concurrency').pipe(
 /**
  * Optional crawl ceiling for callers that intentionally want a partial archive.
  */
-const maxPages = Flag.integer('max-pages').pipe(
+const maxPages = Flag.Int('max-pages').pipe(
   Flag.optional,
   Flag.withDescription('Optional limit for the number of pages to crawl; omitted downloads the full scope')
 );
@@ -49,7 +49,7 @@ const maxPages = Flag.integer('max-pages').pipe(
 /**
  * Per-media response limit expressed in megabytes for human-friendly CLI input.
  */
-const maxMediaMb = Flag.integer('max-media-mb').pipe(
+const maxMediaMb = Flag.Int('max-media-mb').pipe(
   Flag.withDefault(100),
   Flag.withDescription('Skip individual media files larger than this size')
 );
@@ -57,26 +57,31 @@ const maxMediaMb = Flag.integer('max-media-mb').pipe(
 /**
  * Opt-out from link traversal for one-page archival workflows.
  */
-const singlePage = Flag.boolean('single-page').pipe(
+const singlePage = Flag.Boolean('single-page').pipe(
+  Flag.withDefault(false),
   Flag.withDescription('Download only the supplied URL instead of its documentation subtree')
 );
 
 /**
  * Opt-out from digest-aware stale-file cleanup after successful crawls.
  */
-const keepStale = Flag.boolean('keep-stale').pipe(
+const keepStale = Flag.Boolean('keep-stale').pipe(
+  Flag.withDefault(false),
   Flag.withDescription('Keep files that disappeared since the previous successful crawl')
 );
 
 /**
  * Enables request-level progress instead of the default page-level completion messages.
  */
-const verbose = Flag.boolean('verbose').pipe(Flag.withDescription('Show probes, page fetches, and skipped media'));
+const verbose = Flag.Boolean('verbose').pipe(
+  Flag.withDefault(false),
+  Flag.withDescription('Show probes, page fetches, and skipped media')
+);
 
 /**
  * Source adapter policy; automatic mode recognizes GitHub repository URLs.
  */
-const provider = Flag.string('provider').pipe(
+const provider = Flag.String('provider').pipe(
   Flag.withDefault('auto'),
   Flag.withDescription('Source provider: auto, website, or github')
 );
@@ -84,7 +89,7 @@ const provider = Flag.string('provider').pipe(
 /**
  * Repeatable repository-relative path selection for focused GitHub archives.
  */
-const include = Flag.string('include').pipe(
+const include = Flag.String('include').pipe(
   Flag.atLeast(0),
   Flag.withDescription('GitHub folder to include, relative to the URL scope; repeat for multiple folders')
 );
