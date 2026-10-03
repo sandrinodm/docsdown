@@ -104,8 +104,14 @@ jobs:
         run: |
           package_dir="$RUNNER_TEMP/package-artifact"
           mkdir -p "$package_dir"
-          archive="$(npm pack --pack-destination "$package_dir" --json | node -e 'let value=""; process.stdin.on("data", chunk => value += chunk).on("end", () => process.stdout.write(Object.values(JSON.parse(value))[0].filename))')"
-          npm install --global "$package_dir/$archive"
+          # The prepack build writes progress to stdout, so locate the tarball instead of parsing `npm pack --json`.
+          npm pack --pack-destination "$package_dir"
+          archives=("$package_dir"/*.tgz)
+          if [[ ${#archives[@]} -ne 1 ]]; then
+            echo "Expected exactly one package archive, found ${#archives[@]}."
+            exit 1
+          fi
+          npm install --global "${archives[0]}"
           docsdown --help
           docsdown --version
 
