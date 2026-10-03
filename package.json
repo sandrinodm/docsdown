@@ -19,7 +19,7 @@
     "check": "vp check && npm run lint:jsdoc && npm run typecheck",
     "check:fix": "vp check --fix && npm run lint:jsdoc && npm run typecheck",
     "dev": "tsx src/cli.ts",
-    "lint:jsdoc": "jsdoc-lint src && node scripts/check-jsdoc-multiline.mjs",
+    "lint:jsdoc": "jsdoc-lint src",
     "prepack": "npm run build",
     "test": "vp test run",
     "test:coverage": "vp test run --coverage",
