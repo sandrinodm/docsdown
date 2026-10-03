@@ -1,6 +1,7 @@
-import { Data, Effect, Semaphore, type FileSystem } from 'effect';
+import { Data, Effect, Semaphore, Stream, type FileSystem } from 'effect';
 import * as HttpClient from 'effect/http/HttpClient';
 import * as path from 'node:path';
+import { causeMessage, DownloadError } from './errors.js';
 import { describeArchiveFile, finalizeManifest, type ArchiveFile } from './manifest.js';
 import { makeOutputBoundary } from './output-boundary.js';
 import type { DownloadStrategy, ProviderKind } from './providers.js';
@@ -279,11 +280,6 @@ export interface ArchiveRunSummary {
   readonly truncated: boolean;
 
   /**
-   * Successful immutable manifest snapshot, absent for partial runs.
-   */
-  readonly historyManifest: string | undefined;
-
-  /**
    * Search index entries for pages written by this run.
    */
   readonly pages: ReadonlyArray<{ readonly url: string; readonly title: string }>;
@@ -315,11 +311,6 @@ export class ArchiveRunError extends Data.TaggedError('ArchiveRunError')<{
 }> {}
 
 /**
- * Normalizes recoverable transport and response failures for manifest reporting.
- */
-const failureMessage = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
-
-/**
  * Converts an unknown infrastructure failure into the archive module's typed error channel.
  */
 const archiveRunError =
@@ -327,217 +318,290 @@ const archiveRunError =
   (cause: unknown): ArchiveRunError =>
     new ArchiveRunError({
       operation,
-      message: failureMessage(cause),
+      message: causeMessage(cause),
       cause,
     });
 
 /**
+ * Describes a media resource rejected by the per-file size limit.
+ */
+const mediaTooLarge = (url: string, maxBytes: number): DownloadError =>
+  new DownloadError({ url, message: `Media exceeds ${maxBytes} byte limit` });
+
+/**
+ * Collects a response body while enforcing a byte ceiling as chunks arrive.
+ *
+ * Stopping at the first chunk that crosses the limit bounds memory use even when a server omits or misreports
+ * `content-length`, and interrupting the stream releases the underlying connection.
+ */
+const readBoundedBody = <E>(url: string, body: Stream.Stream<Uint8Array, E>, maxBytes: number) =>
+  Effect.gen(function* () {
+    const chunks: Array<Uint8Array> = [];
+    let received = 0;
+    yield* Stream.runForEach(body, (chunk) => {
+      received += chunk.byteLength;
+      if (received > maxBytes) {
+        return Effect.fail(mediaTooLarge(url, maxBytes));
+      }
+
+      chunks.push(chunk);
+      return Effect.void;
+    });
+    return Buffer.concat(chunks, received);
+  });
+
+/**
+ * Fetches one media resource and returns its bytes, enforcing the size limit before, during, and after transfer.
+ *
+ * The provider-known size rejects a file without any request; the declared `content-length` rejects it before the body
+ * is read; the streamed byte count catches servers that omit or understate the length.
+ */
+const fetchMedia = (media: ArchiveMedia, maxBytes: number) =>
+  Effect.gen(function* () {
+    if (media.knownBytes !== undefined && media.knownBytes > maxBytes) {
+      return yield* mediaTooLarge(media.url, maxBytes);
+    }
+
+    const response = yield* HttpClient.get(media.requestUrl ?? media.url, { headers: media.headers });
+    if (response.status < 200 || response.status >= 300) {
+      return yield* new DownloadError({
+        url: media.url,
+        message: `HTTP ${response.status}${media.httpErrorUrl ? ` for ${media.httpErrorUrl}` : ''}`,
+      });
+    }
+
+    const declaredBytes = Number(response.headers['content-length'] ?? '0');
+    if (declaredBytes > maxBytes) {
+      return yield* mediaTooLarge(media.url, maxBytes);
+    }
+
+    return yield* readBoundedBody(media.url, response.stream, maxBytes);
+  });
+
+/**
+ * Position of a resource in the provider's discovery order, used to decide which resource owns a contested file.
+ */
+interface ResourceRank {
+  /**
+   * Provider-supplied discovery order.
+   */
+  readonly order: number;
+
+  /**
+   * Claim sequence that breaks ties between resources with the same order.
+   */
+  readonly sequence: number;
+}
+
+/**
+ * Whether `incumbent` keeps a destination that `challenger` also wants.
+ *
+ * The later discovery order wins, with the later claim breaking ties, so the file on disk matches what a sequential run
+ * would leave behind no matter which concurrent write finishes first.
+ */
+const outranks = (incumbent: ResourceRank, challenger: ResourceRank): boolean =>
+  incumbent.order > challenger.order ||
+  (incumbent.order === challenger.order && incumbent.sequence > challenger.sequence);
+
+/**
  * Runs provider acquisition while owning persistence, accounting, cleanup, and manifest finalization.
  */
-export const runArchive = <E, R>(
+export const runArchive = Effect.fn('runArchive')(function* <E, R>(
   options: ArchiveRunOptions,
   acquire: (archive: ArchiveRecorder) => Effect.Effect<ArchiveAcquisition, E, R>
-) =>
-  Effect.gen(function* () {
-    const rootDirectory = path.resolve(options.outputDirectory);
-    const outputBoundary = yield* makeOutputBoundary(rootDirectory).pipe(
-      Effect.mapError(archiveRunError('create archive root'))
-    );
-    const pages: Array<{
-      readonly url: string;
-      readonly title: string;
-      readonly order: number;
-      readonly sequence: number;
-    }> = [];
-    const files = new Map<string, { readonly file: ArchiveFile; readonly order: number; readonly sequence: number }>();
-    const strategies: Record<string, number> = Object.fromEntries(
-      (options.strategyKeys ?? []).map((strategy) => [strategy, 0])
-    );
-    const claimedResources = new Set<string>();
-    const destinationSemaphores = new Map<string, Semaphore.Semaphore>();
-    const failures: Array<ArchiveFailure> = [];
-    let mediaDownloaded = 0;
-    let indexesDownloaded = 0;
-    let pageSequence = 0;
-    let resourceSequence = 0;
-    const mediaSemaphore = yield* Semaphore.make(options.concurrency);
+) {
+  const rootDirectory = path.resolve(options.outputDirectory);
+  const outputBoundary = yield* makeOutputBoundary(rootDirectory).pipe(
+    Effect.mapError(archiveRunError('create archive root'))
+  );
 
-    /**
-     * Returns the per-destination permit that serializes ownership checks and writes.
-     */
-    const destinationSemaphore = (destination: string): Semaphore.Semaphore => {
-      const existing = destinationSemaphores.get(destination);
-      if (existing) return existing;
-      const created = Semaphore.makeUnsafe(1);
-      destinationSemaphores.set(destination, created);
-      return created;
-    };
+  // What this run has produced, reported in the manifest and summary.
+  const pages: Array<{ readonly url: string; readonly title: string } & ResourceRank> = [];
+  const files = new Map<string, { readonly file: ArchiveFile } & ResourceRank>();
+  const failures: Array<ArchiveFailure> = [];
+  const strategies: Record<string, number> = Object.fromEntries(
+    (options.strategyKeys ?? []).map((strategy) => [strategy, 0])
+  );
+  let mediaDownloaded = 0;
+  let indexesDownloaded = 0;
 
-    /**
-     * Validates, deduplicates, and allocates deterministic ordering for one provider resource.
-     *
-     * Validation intentionally precedes duplicate suppression so an invalid destination can never be hidden by a
-     * previously claimed provider key.
-     */
-    const claimResource = (candidate: string, providerKey: string | undefined, requestedOrder: number | undefined) =>
+  // Claim bookkeeping that keeps concurrent providers deterministic.
+  const claimedResources = new Set<string>();
+  const destinationSemaphores = new Map<string, Semaphore.Semaphore>();
+  const mediaSemaphore = yield* Semaphore.make(options.concurrency);
+  let resourceSequence = 0;
+
+  /**
+   * Returns the per-destination permit that serializes ownership checks and writes.
+   */
+  const destinationSemaphore = (destination: string): Semaphore.Semaphore => {
+    const existing = destinationSemaphores.get(destination);
+    if (existing) {
+      return existing;
+    }
+
+    const created = Semaphore.makeUnsafe(1);
+    destinationSemaphores.set(destination, created);
+    return created;
+  };
+
+  /**
+   * Validates, deduplicates, and allocates deterministic ordering for one provider resource.
+   *
+   * Validation intentionally precedes duplicate suppression so an invalid destination can never be hidden by a
+   * previously claimed provider key.
+   */
+  const claimResource = (candidate: string, providerKey: string | undefined, requestedOrder: number | undefined) =>
+    Effect.gen(function* () {
+      const destination = yield* outputBoundary
+        .resolveFile(candidate)
+        .pipe(Effect.mapError(archiveRunError('validate destination')));
+
+      const dedupeKey = providerKey === undefined ? `destination:${destination}` : `provider:${providerKey}`;
+      if (claimedResources.has(dedupeKey)) {
+        return undefined;
+      }
+
+      claimedResources.add(dedupeKey);
+
+      const sequence = resourceSequence++;
+      return { destination, sequence, order: requestedOrder ?? sequence };
+    });
+
+  /**
+   * Persists a candidate unless a higher-ranked resource already owns the destination.
+   */
+  const writeOwnedFile = (destination: string, file: ArchiveFile, content: string | Uint8Array, rank: ResourceRank) =>
+    destinationSemaphore(destination).withPermit(
       Effect.gen(function* () {
-        const destination = yield* outputBoundary
-          .resolveFile(candidate)
-          .pipe(Effect.mapError(archiveRunError('validate destination')));
-        const dedupeKey = providerKey === undefined ? `destination:${destination}` : `provider:${providerKey}`;
-        if (claimedResources.has(dedupeKey)) return undefined;
-        claimedResources.add(dedupeKey);
-        const sequence = resourceSequence++;
-        return {
-          destination,
-          sequence,
-          order: requestedOrder ?? sequence,
-        };
-      });
+        const existing = files.get(file.path);
+        if (existing && outranks(existing, rank)) {
+          return;
+        }
+
+        yield* outputBoundary.writeFile(destination, content);
+        files.set(file.path, { file, ...rank });
+      })
+    );
+
+  const recorder: ArchiveRecorder = {
+    /**
+     * Claims and persists one normalized Markdown page.
+     */
+    writePage: (page) =>
+      Effect.gen(function* () {
+        const claim = yield* claimResource(page.destination, page.dedupeKey, page.order);
+        if (!claim) {
+          return false;
+        }
+
+        const file = describeArchiveFile(rootDirectory, claim.destination, 'page', page.url, page.content);
+        yield* writeOwnedFile(claim.destination, file, page.content, claim).pipe(
+          Effect.mapError(archiveRunError('write page'))
+        );
+
+        pages.push({ url: page.url, title: page.title, order: claim.order, sequence: claim.sequence });
+        strategies[page.strategy] = (strategies[page.strategy] ?? 0) + 1;
+        return true;
+      }),
 
     /**
-     * Persists a candidate only when it has deterministic precedence over the current destination owner.
+     * Claims and persists one site-supplied discovery index without counting it as a documentation page.
      */
-    const writeOwnedFile = (
-      destination: string,
-      file: ArchiveFile,
-      content: string | Uint8Array,
-      order: number,
-      sequence: number
-    ) =>
-      destinationSemaphore(destination).withPermit(
-        Effect.gen(function* () {
-          const existing = files.get(file.path);
-          if (existing && (existing.order > order || (existing.order === order && existing.sequence > sequence))) {
-            return;
-          }
-          yield* outputBoundary.writeFile(destination, content);
-          files.set(file.path, { file, order, sequence });
-        })
-      );
+    writeIndex: (index) =>
+      Effect.gen(function* () {
+        const claim = yield* claimResource(index.destination, index.dedupeKey, index.order);
+        if (!claim) {
+          return false;
+        }
 
-    const recorder: ArchiveRecorder = {
-      /**
-       * Claims and persists one normalized Markdown page.
-       */
-      writePage: (page) =>
-        Effect.gen(function* () {
-          const claim = yield* claimResource(page.destination, page.dedupeKey, page.order);
-          if (!claim) return false;
-          const { destination, order, sequence } = claim;
-          const file = describeArchiveFile(rootDirectory, destination, 'page', page.url, page.content);
-          yield* writeOwnedFile(destination, file, page.content, order, sequence).pipe(
-            Effect.mapError(archiveRunError('write page'))
-          );
-          const stableSequence = pageSequence++;
-          pages.push({
-            url: page.url,
-            title: page.title,
-            order: page.order ?? stableSequence,
-            sequence: stableSequence,
-          });
-          strategies[page.strategy] = (strategies[page.strategy] ?? 0) + 1;
+        const file = describeArchiveFile(rootDirectory, claim.destination, 'index', index.url, index.content);
+        yield* writeOwnedFile(claim.destination, file, index.content, claim).pipe(
+          Effect.mapError(archiveRunError('write index'))
+        );
+
+        indexesDownloaded += 1;
+        return true;
+      }),
+
+    /**
+     * Claims and downloads one media request under the run concurrency limit.
+     *
+     * Media failures are recorded and reported but never abort the run; the page that referenced the media still
+     * succeeds and keeps its remote link.
+     */
+    downloadMedia: (media) =>
+      Effect.gen(function* () {
+        const claim = yield* claimResource(media.destination, media.dedupeKey, media.order);
+        if (!claim) {
+          return false;
+        }
+
+        const download = Effect.gen(function* () {
+          const content = yield* fetchMedia(media, options.maxMediaBytes);
+          const file = describeArchiveFile(rootDirectory, claim.destination, 'media', media.url, content);
+          yield* writeOwnedFile(claim.destination, file, content, claim);
+          mediaDownloaded += 1;
           return true;
-        }),
-      /**
-       * Claims and persists one site-supplied discovery index without counting it as a documentation page.
-       */
-      writeIndex: (index) =>
-        Effect.gen(function* () {
-          const claim = yield* claimResource(index.destination, index.dedupeKey, index.order);
-          if (!claim) return false;
-          const { destination, order, sequence } = claim;
-          const file = describeArchiveFile(rootDirectory, destination, 'index', index.url, index.content);
-          yield* writeOwnedFile(destination, file, index.content, order, sequence).pipe(
-            Effect.mapError(archiveRunError('write index'))
-          );
-          indexesDownloaded += 1;
-          return true;
-        }),
-      /**
-       * Claims and downloads one media request under the run concurrency limit.
-       */
-      downloadMedia: (media) =>
-        Effect.gen(function* () {
-          const claim = yield* claimResource(media.destination, media.dedupeKey, media.order);
-          if (!claim) return false;
-          const { destination, order, sequence } = claim;
-          return yield* mediaSemaphore.withPermit(
+        });
+
+        return yield* mediaSemaphore.withPermit(download).pipe(
+          Effect.catch((error) =>
             Effect.gen(function* () {
-              if (media.knownBytes !== undefined && media.knownBytes > options.maxMediaBytes) {
-                return yield* Effect.fail(new Error(`Media exceeds ${options.maxMediaBytes} byte limit`));
+              const failure = { url: media.url, message: causeMessage(error) };
+              failures.push(failure);
+              if (options.onMediaFailure) {
+                yield* options.onMediaFailure(failure);
               }
-              const response = yield* HttpClient.get(media.requestUrl ?? media.url, { headers: media.headers });
-              if (response.status < 200 || response.status >= 300) {
-                return yield* Effect.fail(
-                  new Error(`HTTP ${response.status}${media.httpErrorUrl ? ` for ${media.httpErrorUrl}` : ''}`)
-                );
-              }
-              const declaredBytes = Number(response.headers['content-length'] ?? '0');
-              if (declaredBytes > options.maxMediaBytes) {
-                return yield* Effect.fail(new Error(`Media exceeds ${options.maxMediaBytes} byte limit`));
-              }
-              const content = new Uint8Array(yield* response.arrayBuffer);
-              if (content.byteLength > options.maxMediaBytes) {
-                return yield* Effect.fail(new Error(`Media exceeds ${options.maxMediaBytes} byte limit`));
-              }
-              const file = describeArchiveFile(rootDirectory, destination, 'media', media.url, content);
-              yield* writeOwnedFile(destination, file, content, order, sequence);
-              mediaDownloaded += 1;
-              return true;
-            }).pipe(
-              Effect.catch((cause) =>
-                Effect.gen(function* () {
-                  const failure = { url: media.url, message: failureMessage(cause) };
-                  failures.push(failure);
-                  if (options.onMediaFailure) yield* options.onMediaFailure(failure);
-                  return false;
-                })
-              )
-            )
-          );
-        }),
-      /**
-       * Adds one provider-reported failure to the ordered run ledger.
-       */
-      recordFailure: (failure) =>
-        Effect.sync(() => {
-          failures.push(failure);
-        }),
-    };
 
-    const acquisition = yield* acquire(recorder);
-    const orderedPages = [...pages]
-      .sort((left, right) => left.order - right.order || left.sequence - right.sequence)
-      .map(({ url, title }) => ({ url, title }));
-    const manifest = yield* finalizeManifest(rootDirectory, {
-      provider: options.provider,
-      source: options.source,
-      scopePath: options.scopePath,
-      scopePaths: options.scopePaths,
-      pagesDownloaded: orderedPages.length,
-      mediaDownloaded,
-      indexesDownloaded,
-      pages: orderedPages,
-      strategies,
-      failures,
-      files: [...files.values()].map(({ file }) => file),
-      truncated: acquisition.truncated,
-      cleanupEnabled: options.cleanupEnabled,
-    }).pipe(Effect.mapError(archiveRunError('finalize manifest')));
+              return false;
+            })
+          )
+        );
+      }),
 
-    return {
-      provider: options.provider,
-      rootDirectory,
-      pagesDownloaded: orderedPages.length,
-      mediaDownloaded,
-      indexesDownloaded,
-      filesRemoved: manifest.removed.length,
-      filesPreserved: manifest.preserved.length,
-      cleanupFailures: manifest.cleanupFailures.length,
-      truncated: acquisition.truncated,
-      historyManifest: manifest.historyPath,
-      pages: orderedPages,
-      failures,
-    } satisfies ArchiveRunSummary;
-  });
+    /**
+     * Adds one provider-reported failure to the ordered run ledger.
+     */
+    recordFailure: (failure) =>
+      Effect.sync(() => {
+        failures.push(failure);
+      }),
+  };
+
+  const acquisition = yield* acquire(recorder);
+
+  const orderedPages = [...pages]
+    .sort((left, right) => left.order - right.order || left.sequence - right.sequence)
+    .map(({ url, title }) => ({ url, title }));
+
+  const manifest = yield* finalizeManifest(rootDirectory, {
+    provider: options.provider,
+    source: options.source,
+    scopePath: options.scopePath,
+    scopePaths: options.scopePaths,
+    pagesDownloaded: orderedPages.length,
+    mediaDownloaded,
+    indexesDownloaded,
+    pages: orderedPages,
+    strategies,
+    failures,
+    files: [...files.values()].map(({ file }) => file),
+    truncated: acquisition.truncated,
+    cleanupEnabled: options.cleanupEnabled,
+  }).pipe(Effect.mapError(archiveRunError('finalize manifest')));
+
+  return {
+    provider: options.provider,
+    rootDirectory,
+    pagesDownloaded: orderedPages.length,
+    mediaDownloaded,
+    indexesDownloaded,
+    filesRemoved: manifest.removed.length,
+    filesPreserved: manifest.preserved.length,
+    cleanupFailures: manifest.cleanupFailures.length,
+    truncated: acquisition.truncated,
+    pages: orderedPages,
+    failures,
+  } satisfies ArchiveRunSummary;
+});

@@ -45,7 +45,7 @@ const shortHash = (value: string): string => createHash('sha256').update(value).
 /**
  * Decodes a URL segment without allowing malformed percent escapes to abort an archive run.
  */
-const safeDecode = (value: string): string => {
+export const safeDecode = (value: string): string => {
   try {
     return decodeURIComponent(value);
   } catch {
@@ -90,7 +90,10 @@ const pathnameSegments = (url: URL): Array<string> => url.pathname.split('/').fi
  * Adds a stable query hash before a filename extension when the URL contains search parameters.
  */
 const withQueryHash = (filename: string, url: URL): string => {
-  if (!url.search) return filename;
+  if (!url.search) {
+    return filename;
+  }
+
   const extension = path.extname(filename);
   const stem = extension ? filename.slice(0, -extension.length) : filename;
   return `${stem}-${shortHash(url.search)}${extension}`;
@@ -104,7 +107,9 @@ const withQueryHash = (filename: string, url: URL): string => {
 export const pageFilePath = (root: string, url: URL): string => {
   const contentRoot = path.join(root, 'content');
   const segments = pathnameSegments(url);
-  if (segments.length === 0) return path.join(contentRoot, withQueryHash('index.md', url));
+  if (segments.length === 0) {
+    return path.join(contentRoot, withQueryHash('index.md', url));
+  }
 
   if (url.pathname.endsWith('/')) {
     return path.join(contentRoot, ...segments, withQueryHash('index.md', url));
@@ -114,6 +119,7 @@ export const pageFilePath = (root: string, url: URL): string => {
   if (llmsIndexFilenames.has(last.toLowerCase())) {
     return path.join(contentRoot, ...segments.slice(0, -1), withQueryHash(last, url));
   }
+
   const extension = path.extname(last).toLowerCase();
   const filename = pageExtensions.has(extension) ? `${last.slice(0, -extension.length)}.md` : `${last}.md`;
   return path.join(contentRoot, ...segments.slice(0, -1), withQueryHash(filename, url));
@@ -125,6 +131,7 @@ export const pageFilePath = (root: string, url: URL): string => {
 export const mediaFilePath = (root: string, url: URL): string => {
   const segments = pathnameSegments(url);
   const rawName = segments.at(-1) ?? 'index';
+
   const filename = withQueryHash(rawName, url);
   return path.join(root, 'media', sanitizeSegment(url.host), ...segments.slice(0, -1), filename);
 };
@@ -146,6 +153,7 @@ export const markdownSuffixUrl = (url: URL): URL => {
   const candidate = new URL(url);
   candidate.search = '';
   candidate.hash = '';
+
   const withoutSlash = candidate.pathname.replace(/\/+$/, '');
   candidate.pathname = `${withoutSlash || '/index'}.md`;
   return candidate;
@@ -155,10 +163,19 @@ export const markdownSuffixUrl = (url: URL): URL => {
  * Determines the strict pathname subtree that a crawl may follow from its starting URL.
  */
 export const scopePathFor = (url: URL): string => {
-  if (url.pathname === '/') return '/';
-  if (url.pathname.endsWith('/')) return url.pathname.replace(/\/+$/, '') || '/';
+  if (url.pathname === '/') {
+    return '/';
+  }
+
+  if (url.pathname.endsWith('/')) {
+    return url.pathname.replace(/\/+$/, '') || '/';
+  }
+
   const extension = path.posix.extname(url.pathname).toLowerCase();
-  if (extension) return path.posix.dirname(url.pathname);
+  if (extension) {
+    return path.posix.dirname(url.pathname);
+  }
+
   return url.pathname;
 };
 
@@ -166,9 +183,18 @@ export const scopePathFor = (url: URL): string => {
  * Checks whether an HTTP(S) candidate stays on the starting origin and inside the crawl subtree.
  */
 export const isInScope = (candidate: URL, start: URL, scopePath: string): boolean => {
-  if (candidate.origin !== start.origin) return false;
-  if (!['http:', 'https:'].includes(candidate.protocol)) return false;
-  if (scopePath === '/') return true;
+  if (candidate.origin !== start.origin) {
+    return false;
+  }
+
+  if (!['http:', 'https:'].includes(candidate.protocol)) {
+    return false;
+  }
+
+  if (scopePath === '/') {
+    return true;
+  }
+
   return candidate.pathname === scopePath || candidate.pathname.startsWith(`${scopePath}/`);
 };
 

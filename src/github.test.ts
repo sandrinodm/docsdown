@@ -1,5 +1,5 @@
 import { NodeHttpClient, NodeServices } from '@effect/platform-node';
-import { Effect, Layer } from 'effect';
+import { Effect, Layer, Redacted } from 'effect';
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -24,7 +24,10 @@ const listen = async (handler: RequestListener) => {
     });
   });
   const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Missing test server address');
+  if (!address || typeof address === 'string') {
+    throw new Error('Missing test server address');
+  }
+
   const origin = `http://127.0.0.1:${address.port}`;
   return {
     origin,
@@ -49,7 +52,7 @@ const options = (url: string, outputDirectory: string, overrides = {}) => ({
   singlePage: false,
   keepStale: false,
   verbose: true,
-  githubToken: 'secret-test-token',
+  githubToken: Redacted.make('secret-test-token'),
   ...overrides,
 });
 
@@ -61,6 +64,7 @@ describe('GitHub repository downloads', () => {
         response.end(JSON.stringify({ default_branch: 'main' }));
         return;
       }
+
       if (request.url === '/repos/acme/mono/git/trees/main?recursive=1') {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(
@@ -75,16 +79,19 @@ describe('GitHub repository downloads', () => {
         );
         return;
       }
+
       if (request.url === '/raw/acme/mono/main/docs/guide.md') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
         response.end('# Guide\n');
         return;
       }
+
       if (request.url === '/raw/acme/mono/main/packages/sdk/docs/api.mdx') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
         response.end('# SDK API\n');
         return;
       }
+
       response.writeHead(404).end('not selected');
     });
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-github-folders-test-'));
@@ -117,12 +124,14 @@ describe('GitHub repository downloads', () => {
       if (request.url?.startsWith('/repos/')) {
         expect(request.headers['x-github-api-version']).toBe('2022-11-28');
       }
+
       if (request.url === '/repos/acme/docs') {
         expect(request.headers.authorization).toBe('Bearer secret-test-token');
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ default_branch: 'main' }));
         return;
       }
+
       if (request.url === '/repos/acme/docs/git/trees/main?recursive=1') {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(
@@ -152,6 +161,7 @@ describe('GitHub repository downloads', () => {
         );
         return;
       }
+
       if (request.url === '/repos/acme/docs/contents/README.md?ref=main') {
         expect(request.headers.accept).toBe('application/vnd.github.raw+json');
         response.writeHead(200, { 'content-type': 'text/markdown' });
@@ -160,6 +170,7 @@ describe('GitHub repository downloads', () => {
         );
         return;
       }
+
       if (request.url === '/raw/acme/docs/main/README.md') {
         expect(request.headers.authorization).toBeUndefined();
         response.writeHead(200, { 'content-type': 'text/markdown' });
@@ -168,6 +179,7 @@ describe('GitHub repository downloads', () => {
         );
         return;
       }
+
       if (request.url === '/repos/acme/docs/contents/docs/guide.md?ref=main') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
         response.end(
@@ -175,6 +187,7 @@ describe('GitHub repository downloads', () => {
         );
         return;
       }
+
       if (request.url === '/repos/acme/docs/contents/docs/component.mdx?ref=main') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
         response.end(
@@ -182,43 +195,51 @@ describe('GitHub repository downloads', () => {
         );
         return;
       }
+
       if (request.url === '/repos/acme/docs/contents/docs/broken.md?ref=main') {
         response.writeHead(500).end('broken');
         return;
       }
+
       if (request.url === '/repos/acme/docs/contents/.md?ref=main') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
         response.end('Extension-only document.');
         return;
       }
+
       if (request.url === '/repos/acme/docs/contents/assets/logo.png?ref=main') {
         response.writeHead(200, { 'content-type': 'image/png', 'content-length': '4' });
         response.end(new Uint8Array([1, 2, 3, 4]));
         return;
       }
+
       if (request.url === '/raw/acme/docs/main/assets/logo.png') {
         expect(request.headers.authorization).toBeUndefined();
         response.writeHead(200, { 'content-type': 'image/png', 'content-length': '4' });
         response.end(new Uint8Array([1, 2, 3, 4]));
         return;
       }
+
       if (request.url === '/repos/acme/docs/contents/assets/declared.png?ref=main') {
         response.writeHead(200, { 'content-type': 'image/png', 'content-length': '5' });
         response.end(new Uint8Array([1, 2, 3, 4, 5]));
         return;
       }
+
       if (request.url === '/repos/acme/docs/contents/assets/actual.png?ref=main') {
         response.writeHead(200, { 'content-type': 'image/png', 'transfer-encoding': 'chunked' });
         response.write(new Uint8Array([1, 2, 3]));
         response.end(new Uint8Array([4, 5]));
         return;
       }
+
       if (request.url === '/external.png') {
         expect(request.headers.authorization).toBeUndefined();
         response.writeHead(200, { 'content-type': 'image/png' });
         response.end(new Uint8Array([5, 6]));
         return;
       }
+
       response.writeHead(404).end('missing');
     });
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-github-test-'));
@@ -232,7 +253,6 @@ describe('GitHub repository downloads', () => {
 
       expect(summary).toMatchObject({ provider: 'github', pagesDownloaded: 3, mediaDownloaded: 2, truncated: false });
       expect(summary.failures).toHaveLength(4);
-      expect(summary.historyManifest).toBeUndefined();
       const readme = await readFile(path.join(summary.rootDirectory, 'content', 'README.md'), 'utf8');
       const guide = await readFile(path.join(summary.rootDirectory, 'content', 'docs', 'guide.md'), 'utf8');
       const component = await readFile(path.join(summary.rootDirectory, 'content', 'docs', 'component.mdx'), 'utf8');

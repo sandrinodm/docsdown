@@ -1,6 +1,6 @@
 import { NodeServices } from '@effect/platform-node';
 import { Effect } from 'effect';
-import { access, link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vite-plus/test';
@@ -68,7 +68,8 @@ describe('archive manifests', () => {
       { ...valid, path: '..' },
       { ...valid, path: '../outside.md' },
       { ...valid, path: 'manifest.json' },
-      { ...valid, path: '.manifests/old.json' },
+      { ...valid, path: 'docsdown.json' },
+      { ...valid, path: '.docsdown.json' },
       { ...valid, kind: 'other' },
       { ...valid, url: 42 },
       { ...valid, sha256: 42 },
@@ -149,7 +150,6 @@ describe('archive manifests', () => {
 
     expect(result.status).toBe('partial');
     expect(result.cleanupFailures).toHaveLength(1);
-    expect(result.historyPath).toBeUndefined();
     const manifest = JSON.parse(await readFile(path.join(root, 'manifest.json'), 'utf8'));
     expect(manifest.ownedFiles).toEqual([stale]);
   });
@@ -182,7 +182,7 @@ describe('archive manifests', () => {
     await expect(readFile(outsideFile, 'utf8')).resolves.toBe('stale');
   });
 
-  it('does not write manifest metadata through hard links or directory symlinks outside the archive', async () => {
+  it('does not write manifest metadata through a hard link to a file outside the archive', async () => {
     const parent = await mkdtemp(path.join(tmpdir(), 'docsdown-manifest-test-'));
     temporaryDirectories.push(parent);
     const root = path.join(parent, 'archive');
@@ -195,12 +195,6 @@ describe('archive manifests', () => {
 
     await expect(finalize(root, makeRun())).resolves.toMatchObject({ status: 'success' });
     await expect(readFile(outsideManifest, 'utf8')).resolves.toBe('outside sentinel');
-
-    await rm(path.join(root, 'manifest.json'));
-    await rm(path.join(root, '.manifests'), { recursive: true });
-    await symlink(outside, path.join(root, '.manifests'), 'junction');
-    await expect(finalize(root, makeRun())).rejects.toThrow();
-    await expect(readdir(outside)).resolves.toEqual(['manifest.json']);
   });
 
   it('preserves stale files whose contents changed locally', async () => {
@@ -223,7 +217,6 @@ describe('archive manifests', () => {
     expect(result.status).toBe('success');
     expect(result.preserved).toEqual(['docs.md']);
     await expect(access(pagePath)).resolves.toBeUndefined();
-    expect(await readdir(path.join(root, '.manifests'))).toHaveLength(2);
   });
 
   it('does not clean stale files after a partial crawl', async () => {
@@ -252,7 +245,6 @@ describe('archive manifests', () => {
     expect(result.status).toBe('partial');
     expect(result.removed).toEqual([]);
     await expect(access(pagePath)).resolves.toBeUndefined();
-    expect(await readdir(path.join(root, '.manifests'))).toHaveLength(1);
     const manifest = JSON.parse(await readFile(path.join(root, 'manifest.json'), 'utf8'));
     expect(manifest.ownedFiles.map((file: { path: string }) => file.path)).toEqual(['old.md']);
   });

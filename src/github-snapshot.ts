@@ -144,7 +144,10 @@ const trimPath = (value: string): string => value.replace(/^\/+|\/+$/g, '');
  * Determines whether a path can be safely mirrored below an archive root.
  */
 export const isSafeGitHubPath = (value: string): boolean => {
-  if (!value || value.includes('\\') || path.posix.isAbsolute(value)) return false;
+  if (!value || value.includes('\\') || path.posix.isAbsolute(value)) {
+    return false;
+  }
+
   const normalized = path.posix.normalize(value);
   return normalized === value && normalized !== '.' && normalized !== '..' && !normalized.startsWith('../');
 };
@@ -156,24 +159,40 @@ export const isGitHubMarkdownPath = (value: string): boolean => /\.(?:md|mdx|mar
 
 /**
  * Parses supported GitHub browser and raw-content URLs into one repository model.
+ *
+ * Supported shapes:
+ *
+ * - `github.com/{owner}/{repository}`: the whole repository at its default branch.
+ * - `github.com/{owner}/{repository}/tree/{ref}/{path}`: one folder.
+ * - `github.com/{owner}/{repository}/blob/{ref}/{path}`: one file.
+ * - `raw.githubusercontent.com/{owner}/{repository}/{ref}/{path}`: one file, or a folder when not Markdown.
  */
 export const parseGitHubUrl = (value: string | URL): GitHubTarget => {
-  const url = value instanceof URL ? new URL(value) : new URL(value);
+  const url = new URL(value);
   const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+
   if (url.hostname === 'github.com') {
     const owner = segments[0];
     const rawRepository = segments[1];
-    if (!owner || !rawRepository) throw new Error('GitHub URLs must include an owner and repository');
+    if (!owner || !rawRepository) {
+      throw new Error('GitHub URLs must include an owner and repository');
+    }
+
     const repository = rawRepository.replace(/\.git$/i, '');
     const mode = segments[2];
     if (mode === 'tree' || mode === 'blob') {
       const ref = segments[3];
-      if (!ref) throw new Error(`GitHub ${mode} URLs must include a branch, tag, or commit`);
+      if (!ref) {
+        throw new Error(`GitHub ${mode} URLs must include a branch, tag, or commit`);
+      }
+
       const repositoryPath = trimPath(segments.slice(4).join('/'));
       return { owner, repository, ref, repositoryPath, exactFile: mode === 'blob' };
     }
+
     return { owner, repository, ref: undefined, repositoryPath: '', exactFile: false };
   }
+
   if (url.hostname === 'raw.githubusercontent.com') {
     const owner = segments[0];
     const repository = segments[1];
@@ -181,9 +200,11 @@ export const parseGitHubUrl = (value: string | URL): GitHubTarget => {
     if (!owner || !repository || !ref) {
       throw new Error('Raw GitHub URLs must include an owner, repository, ref, and path');
     }
+
     const repositoryPath = trimPath(segments.slice(3).join('/'));
     return { owner, repository, ref, repositoryPath, exactFile: isGitHubMarkdownPath(repositoryPath) };
   }
+
   throw new Error(`Unsupported GitHub URL: ${url.href}`);
 };
 
@@ -191,15 +212,23 @@ export const parseGitHubUrl = (value: string | URL): GitHubTarget => {
  * Resolves optional user-selected paths against the directory scope encoded by a GitHub URL.
  */
 export const resolveGitHubScopes = (target: GitHubTarget, selections: ReadonlyArray<string>): ReadonlyArray<string> => {
-  if (selections.length === 0) return target.repositoryPath ? [target.repositoryPath] : [];
-  if (target.exactFile) throw new Error('--include cannot be combined with a GitHub blob URL');
+  if (selections.length === 0) {
+    return target.repositoryPath ? [target.repositoryPath] : [];
+  }
+
+  if (target.exactFile) {
+    throw new Error('--include cannot be combined with a GitHub blob URL');
+  }
+
   const scopes = selections.map((selection) => {
     const relativePath = trimPath(selection);
     if (!isSafeGitHubPath(relativePath)) {
       throw new Error(`Invalid GitHub include path: ${JSON.stringify(selection)}`);
     }
+
     return target.repositoryPath ? `${target.repositoryPath}/${relativePath}` : relativePath;
   });
+
   return [...new Set(scopes)];
 };
 
@@ -207,13 +236,22 @@ export const resolveGitHubScopes = (target: GitHubTarget, selections: ReadonlyAr
  * Builds a deterministic archive plan from a GitHub URL and recursive tree.
  */
 export const planGitHubSnapshot = (request: GitHubSnapshotRequest): GitHubSnapshotPlan => {
-  if (request.maxPages !== undefined && request.maxPages < 1) throw new Error('--max-pages must be at least 1');
+  if (request.maxPages !== undefined && request.maxPages < 1) {
+    throw new Error('--max-pages must be at least 1');
+  }
+
   const target = parseGitHubUrl(request.url);
   const ref = target.ref ?? request.defaultRef;
-  if (ref === undefined) throw new Error(`Could not resolve a GitHub ref for ${String(request.url)}`);
+  if (ref === undefined) {
+    throw new Error(`Could not resolve a GitHub ref for ${String(request.url)}`);
+  }
+
   const scopes = resolveGitHubScopes(target, request.includes ?? []);
+
+  // Only files with paths that stay inside the archive are ever considered.
   const safeBlobs = request.tree.entries.filter((entry) => entry.type === 'blob' && isSafeGitHubPath(entry.path));
   const blobByPath = new Map(safeBlobs.map((entry) => [entry.path, entry]));
+
   /**
    * Determines whether a discovered path belongs to the selected repository scope.
    */
@@ -221,17 +259,17 @@ export const planGitHubSnapshot = (request: GitHubSnapshotRequest): GitHubSnapsh
     target.exactFile
       ? entryPath === target.repositoryPath
       : scopes.length === 0 || scopes.some((scope) => entryPath === scope || entryPath.startsWith(`${scope}/`));
+
   const discovered = safeBlobs
     .filter((entry) => isGitHubMarkdownPath(entry.path) && inScope(entry.path))
     .sort((left, right) => left.path.localeCompare(right.path));
-  const markdown = discovered.slice(
-    0,
-    request.singlePage ? 1 : Math.min(request.maxPages ?? discovered.length, discovered.length)
-  );
+  const markdown = discovered.slice(0, request.singlePage ? 1 : request.maxPages);
+
   /**
    * Looks up a safe blob's declared size without exposing the mutable planning index.
    */
   const blobSize = (repositoryPath: string): number | undefined => blobByPath.get(repositoryPath)?.size;
+
   return {
     target,
     ref,

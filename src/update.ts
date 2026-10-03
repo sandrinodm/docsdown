@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { Effect } from 'effect';
+import { Effect, Result, type Redacted } from 'effect';
 import { discoverArchiveConfigs, makeArchiveConfig, writeArchiveConfig, type ArchiveConfig } from './config.js';
 import { downloadDocumentation, type DocumentationDownloadOptions } from './providers.js';
 
@@ -15,7 +15,7 @@ export interface UpdateDocumentationOptions {
   /**
    * Runtime-only GitHub credential, never persisted in archive configuration.
    */
-  readonly githubToken?: string;
+  readonly githubToken?: Redacted.Redacted<string>;
 }
 
 /**
@@ -71,49 +71,55 @@ const optionsFromConfig = (
 /**
  * Downloads one archive and writes its token-free update configuration after pages have been produced.
  */
-export const downloadAndConfigure = (options: DocumentationDownloadOptions) =>
-  Effect.gen(function* () {
-    const summary = yield* downloadDocumentation(options);
-    const config = makeArchiveConfig(options, summary.provider);
-    yield* writeArchiveConfig(summary.rootDirectory, config);
-    return summary;
-  });
+export const downloadAndConfigure = Effect.fn('downloadAndConfigure')(function* (
+  options: DocumentationDownloadOptions
+) {
+  const summary = yield* downloadDocumentation(options);
+  const config = makeArchiveConfig(options, summary.provider);
+  yield* writeArchiveConfig(summary.rootDirectory, config);
+  return summary;
+});
 
 /**
  * Discovers and sequentially refreshes every managed archive beneath one output directory.
  *
  * Individual invalid configurations and failed downloads are reported after all other archives have been attempted.
  */
-export const updateDocumentationArchives = (options: UpdateDocumentationOptions) =>
-  Effect.gen(function* () {
-    const discovered = yield* discoverArchiveConfigs(options.outputDirectory);
-    const failures: Array<UpdateFailure> = discovered.flatMap((entry) =>
-      entry.ok ? [] : [{ configPath: entry.path, message: entry.message }]
-    );
-    const valid = discovered.filter((entry) => entry.ok);
-    const results = yield* Effect.forEach(
-      valid,
-      (entry) =>
-        downloadAndConfigure(optionsFromConfig(entry.config, entry.path, options)).pipe(
-          Effect.map((summary) => {
-            const incompleteCount = Number(summary.truncated) + summary.failures.length;
-            if (incompleteCount === 0) return true;
-            failures.push({
-              configPath: entry.path,
-              message: `Archive remained partial: ${summary.failures.length} failure(s), truncated=${summary.truncated}`,
-            });
-            return false;
-          }),
-          Effect.catch((error) => {
-            failures.push({ configPath: entry.path, message: error.message });
-            return Effect.succeed(false);
-          })
-        ),
-      { concurrency: 1 }
-    );
-    return {
-      configsFound: discovered.length,
-      archivesUpdated: results.filter(Boolean).length,
-      failures,
-    } satisfies UpdateDocumentationSummary;
-  });
+export const updateDocumentationArchives = Effect.fn('updateDocumentationArchives')(function* (
+  options: UpdateDocumentationOptions
+) {
+  const discovered = yield* discoverArchiveConfigs(options.outputDirectory);
+  const failures: Array<UpdateFailure> = [];
+  let archivesUpdated = 0;
+
+  // Archives update one at a time so their individual concurrency limits never multiply.
+  for (const entry of discovered) {
+    if (!entry.ok) {
+      failures.push({ configPath: entry.path, message: entry.message });
+      continue;
+    }
+
+    const result = yield* Effect.result(downloadAndConfigure(optionsFromConfig(entry.config, entry.path, options)));
+    if (Result.isFailure(result)) {
+      failures.push({ configPath: entry.path, message: result.failure.message });
+      continue;
+    }
+
+    const summary = result.success;
+    if (summary.truncated || summary.failures.length > 0) {
+      failures.push({
+        configPath: entry.path,
+        message: `Archive remained partial: ${summary.failures.length} failure(s), truncated=${summary.truncated}`,
+      });
+      continue;
+    }
+
+    archivesUpdated += 1;
+  }
+
+  return {
+    configsFound: discovered.length,
+    archivesUpdated,
+    failures,
+  } satisfies UpdateDocumentationSummary;
+});

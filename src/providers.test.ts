@@ -32,15 +32,30 @@ describe('provider selection', () => {
   });
 
   it('validates provider selection and shared limits before adapter work', async () => {
-    expect(() => downloadDocumentation({ ...options, provider: 'website', githubPaths: ['docs'] })).toThrow(
-      '--include is only supported by the GitHub provider'
+    const includeError = await downloadDocumentation({ ...options, provider: 'website', githubPaths: ['docs'] }).pipe(
+      Effect.flip,
+      Effect.provide(TestLayer),
+      Effect.runPromise
     );
+    expect(includeError).toMatchObject({
+      _tag: 'InvalidOptionsError',
+      message: '--include is only supported by the GitHub provider',
+    });
+    await expect(
+      downloadDocumentation({ ...options, provider: 'other' }).pipe(Effect.provide(TestLayer), Effect.runPromise)
+    ).rejects.toThrow('Unknown provider "other"; expected auto, website, or github');
+    await expect(
+      downloadDocumentation({ ...options, provider: 'auto', url: 'http://[invalid' }).pipe(
+        Effect.provide(TestLayer),
+        Effect.runPromise
+      )
+    ).rejects.toThrow('Invalid URL');
     await expect(
       downloadDocumentation({ ...options, provider: 'website', concurrency: 0 }).pipe(
         Effect.provide(TestLayer),
         Effect.runPromise
       )
-    ).rejects.toThrow('--concurrency must be at least 1');
+    ).rejects.toThrow('--concurrency must be an integer of at least 1');
     await expect(
       downloadDocumentation({
         ...options,
@@ -49,13 +64,19 @@ describe('provider selection', () => {
         maxPages: 0,
         githubPaths: ['docs'],
       }).pipe(Effect.provide(TestLayer), Effect.runPromise)
-    ).rejects.toThrow('--max-pages must be at least 1');
+    ).rejects.toThrow('--max-pages must be an integer of at least 1');
     await expect(
       downloadDocumentation({ ...options, provider: 'website', maxMediaBytes: 0 }).pipe(
         Effect.provide(TestLayer),
         Effect.runPromise
       )
     ).rejects.toThrow('--max-media-mb must be greater than 0');
+    await expect(
+      downloadDocumentation({ ...options, provider: 'website', concurrency: 1.5 }).pipe(
+        Effect.provide(TestLayer),
+        Effect.runPromise
+      )
+    ).rejects.toThrow('--concurrency must be an integer of at least 1');
   });
 
   it('dispatches GitHub URLs through the GitHub adapter', async () => {
@@ -66,5 +87,11 @@ describe('provider selection', () => {
         url: 'https://github.com/acme',
       }).pipe(Effect.provide(TestLayer), Effect.runPromise)
     ).rejects.toThrow('GitHub URLs must include an owner and repository');
+    const error = await downloadDocumentation({ ...options, provider: 'github', url: 'https://github.com/acme' }).pipe(
+      Effect.flip,
+      Effect.provide(TestLayer),
+      Effect.runPromise
+    );
+    expect(error._tag).toBe('InvalidOptionsError');
   });
 });

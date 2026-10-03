@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import { Effect, Option, Schema } from 'effect';
-import { makeOutputBoundary } from './output-boundary.js';
+import { archiveConfigFilename, legacyArchiveConfigFilename } from './config.js';
+import { makeOutputBoundary, type OutputBoundary } from './output-boundary.js';
 
 /**
  * Archive resource classes with distinct cleanup and reporting semantics.
@@ -151,11 +152,6 @@ export interface ManifestResult {
   readonly status: 'success' | 'partial';
 
   /**
-   * Immutable successful-run snapshot, absent when the run was partial.
-   */
-  readonly historyPath: string | undefined;
-
-  /**
    * Stale owned paths removed or already absent.
    */
   readonly removed: ReadonlyArray<string>;
@@ -195,9 +191,13 @@ type CleanupResult =
 const manifestFilename = 'manifest.json';
 
 /**
- * Append-only directory containing snapshots of successful runs.
+ * Root files that hold archive bookkeeping rather than downloaded content.
  */
-const historyDirectoryName = '.manifests';
+const bookkeepingFilenames: ReadonlySet<string> = new Set([
+  manifestFilename,
+  archiveConfigFilename,
+  legacyArchiveConfigFilename,
+]);
 
 /**
  * Computes the content digest used to detect local changes before deletion.
@@ -220,11 +220,17 @@ const portableRelativePath = (rootDirectory: string, filePath: string): string =
  * Rejects absolute, traversing, reserved, or non-canonical manifest paths before filesystem use.
  */
 const isSafeArchivePath = (value: string): boolean => {
-  if (!value || value.includes('\\') || path.posix.isAbsolute(value)) return false;
+  if (!value || value.includes('\\') || path.posix.isAbsolute(value)) {
+    return false;
+  }
+
   const normalized = path.posix.normalize(value);
-  if (normalized !== value || normalized === '.' || normalized === '..' || normalized.startsWith('../')) return false;
-  const firstSegment = normalized.split('/')[0];
-  return normalized !== manifestFilename && firstSegment !== historyDirectoryName;
+  if (normalized !== value || normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
+    return false;
+  }
+
+  // Bookkeeping files are never owned content, so a tampered manifest cannot get them deleted.
+  return !bookkeepingFilenames.has(normalized);
 };
 
 /**
@@ -267,8 +273,11 @@ const decodeArchiveFile = Schema.decodeUnknownOption(ArchiveFileSchema);
 const normalizedFiles = (files: ReadonlyArray<ArchiveFile>): Array<ArchiveFile> => {
   const byPath = new Map<string, ArchiveFile>();
   for (const file of files) {
-    if (isSafeArchivePath(file.path)) byPath.set(file.path, file);
+    if (isSafeArchivePath(file.path)) {
+      byPath.set(file.path, file);
+    }
   }
+
   return [...byPath.values()].sort((left, right) => left.path.localeCompare(right.path));
 };
 
@@ -279,8 +288,17 @@ const normalizedFiles = (files: ReadonlyArray<ArchiveFile>): Array<ArchiveFile> 
  */
 const parsePreviousManifest = (source: string): PreviousManifest | undefined => {
   const manifest = Option.getOrUndefined(decodePreviousManifest(source));
-  if (!manifest) return undefined;
-  const owned = 'ownedFiles' in manifest ? manifest.ownedFiles : 'files' in manifest ? manifest.files : [];
+  if (!manifest) {
+    return undefined;
+  }
+
+  let owned: ReadonlyArray<unknown> = [];
+  if ('ownedFiles' in manifest) {
+    owned = manifest.ownedFiles;
+  } else if ('files' in manifest) {
+    owned = manifest.files;
+  }
+
   return {
     ownedFiles: owned.flatMap((file) => {
       const parsed = Option.getOrUndefined(decodeArchiveFile(file));
@@ -288,11 +306,6 @@ const parsePreviousManifest = (source: string): PreviousManifest | undefined => 
     }),
   };
 };
-
-/**
- * Normalizes unknown filesystem failures for durable manifest reporting.
- */
-const errorMessage = (error: { readonly message: string }): string => error.message;
 
 /**
  * Unions ownership sets by portable path while preserving the newest record for duplicates.
@@ -318,98 +331,105 @@ export const describeArchiveFile = (
 });
 
 /**
- * Writes the latest manifest, snapshots successful runs, and safely removes stale tool-owned files.
+ * Removes one stale owned file unless it was edited locally since docsdown wrote it.
+ *
+ * A missing file counts as removed. Filesystem errors are reported per file so one problem never blocks the others.
  */
-export const finalizeManifest = (rootDirectory: string, run: ManifestRun) =>
+const cleanStaleFile = (outputBoundary: OutputBoundary, rootDirectory: string, file: ArchiveFile) =>
   Effect.gen(function* () {
-    const outputBoundary = yield* makeOutputBoundary(rootDirectory);
-    const currentFiles = normalizedFiles(run.files);
-    const previous = yield* outputBoundary.readFileString(path.join(rootDirectory, manifestFilename)).pipe(
-      Effect.map(parsePreviousManifest),
-      Effect.catch(() => Effect.succeed(undefined))
-    );
-    const previousOwned = normalizedFiles(previous?.ownedFiles ?? []);
-    const currentPaths = new Set(currentFiles.map((file) => file.path));
-    const staleFiles = previousOwned.filter((file) => !currentPaths.has(file.path));
-    const crawlSucceeded = run.failures.length === 0 && !run.truncated;
-    const cleanupEligible = crawlSucceeded && run.cleanupEnabled;
-
-    const cleanupResults = cleanupEligible
-      ? yield* Effect.forEach(
-          staleFiles,
-          (file): Effect.Effect<CleanupResult, never> =>
-            Effect.gen(function* () {
-              const destination = path.resolve(rootDirectory, ...file.path.split('/'));
-              const exists = yield* outputBoundary.exists(destination);
-              if (!exists) return { state: 'removed', file } as const;
-              const content = yield* outputBoundary.readFile(destination);
-              if (digest(content) !== file.sha256) return { state: 'preserved', file } as const;
-              yield* outputBoundary.removeFile(destination);
-              return { state: 'removed', file } as const;
-            }).pipe(
-              Effect.catch((error) =>
-                Effect.succeed({ state: 'failed', file, message: errorMessage(error) } satisfies CleanupResult)
-              )
-            ),
-          { concurrency: 1 }
-        )
-      : [];
-
-    const removed = cleanupResults.filter((result) => result.state === 'removed').map((result) => result.file.path);
-    const preservedFiles = cleanupResults.filter((result) => result.state === 'preserved').map((result) => result.file);
-    const cleanupFailures = cleanupResults
-      .filter((result): result is Extract<CleanupResult, { state: 'failed' }> => result.state === 'failed')
-      .map((result) => ({ path: result.file.path, message: result.message }));
-    const failedFiles = cleanupResults
-      .filter((result): result is Extract<CleanupResult, { state: 'failed' }> => result.state === 'failed')
-      .map((result) => result.file);
-    const ownedFiles = cleanupEligible
-      ? mergeOwnedFiles(currentFiles, preservedFiles, failedFiles)
-      : mergeOwnedFiles(previousOwned, currentFiles);
-    const status = crawlSucceeded && cleanupFailures.length === 0 ? ('success' as const) : ('partial' as const);
-    const downloadedAt = new Date().toISOString();
-    const runId = `${downloadedAt.replaceAll(':', '-')}-${randomUUID().slice(0, 8)}`;
-    const manifest = {
-      schemaVersion: 1,
-      runId,
-      status,
-      provider: run.provider,
-      source: run.source,
-      scopePath: run.scopePath,
-      scopePaths: run.scopePaths,
-      downloadedAt,
-      pagesDownloaded: run.pagesDownloaded,
-      mediaDownloaded: run.mediaDownloaded,
-      indexesDownloaded: run.indexesDownloaded,
-      pages: [...run.pages].sort((left, right) => left.url.localeCompare(right.url)),
-      strategies: run.strategies,
-      failures: run.failures,
-      truncated: run.truncated,
-      files: currentFiles,
-      ownedFiles,
-      cleanup: {
-        enabled: run.cleanupEnabled,
-        eligible: cleanupEligible,
-        removed,
-        preserved: preservedFiles.map((file) => file.path),
-        failures: cleanupFailures,
-      },
-    };
-    const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
-    yield* outputBoundary.writeFile(path.join(rootDirectory, manifestFilename), serialized);
-
-    let historyPath: string | undefined;
-    if (status === 'success') {
-      const historyDirectory = path.join(rootDirectory, historyDirectoryName);
-      historyPath = path.join(historyDirectory, `${runId}.json`);
-      yield* outputBoundary.writeFile(historyPath, serialized);
+    const destination = path.resolve(rootDirectory, ...file.path.split('/'));
+    if (!(yield* outputBoundary.exists(destination))) {
+      return { state: 'removed', file } as const;
     }
 
-    return {
-      status,
-      historyPath,
+    const content = yield* outputBoundary.readFile(destination);
+    if (digest(content) !== file.sha256) {
+      return { state: 'preserved', file } as const;
+    }
+
+    yield* outputBoundary.removeFile(destination);
+    return { state: 'removed', file } as const;
+  }).pipe(
+    Effect.catch((error) => Effect.succeed({ state: 'failed', file, message: error.message } satisfies CleanupResult))
+  );
+
+/**
+ * Writes the latest manifest, snapshots successful runs, and safely removes stale tool-owned files.
+ */
+export const finalizeManifest = Effect.fn('finalizeManifest')(function* (rootDirectory: string, run: ManifestRun) {
+  const outputBoundary = yield* makeOutputBoundary(rootDirectory);
+  const currentFiles = normalizedFiles(run.files);
+
+  // Files the previous run owned but this run did not produce are stale.
+  const previous = yield* outputBoundary.readFileString(path.join(rootDirectory, manifestFilename)).pipe(
+    Effect.map((source) => parsePreviousManifest(source)),
+    Effect.catch(() => Effect.succeed(undefined))
+  );
+  const previousOwned = normalizedFiles(previous?.ownedFiles ?? []);
+  const currentPaths = new Set(currentFiles.map((file) => file.path));
+  const staleFiles = previousOwned.filter((file) => !currentPaths.has(file.path));
+
+  // Stale files are only removed after a complete run, so a partial crawl can never delete good content.
+  const crawlSucceeded = run.failures.length === 0 && !run.truncated;
+  const cleanupEligible = crawlSucceeded && run.cleanupEnabled;
+  const cleanupResults = cleanupEligible
+    ? yield* Effect.forEach(staleFiles, (file) => cleanStaleFile(outputBoundary, rootDirectory, file), {
+        concurrency: 1,
+      })
+    : [];
+
+  const removed: Array<string> = [];
+  const preservedFiles: Array<ArchiveFile> = [];
+  const failedFiles: Array<ArchiveFile> = [];
+  const cleanupFailures: Array<{ readonly path: string; readonly message: string }> = [];
+  for (const result of cleanupResults) {
+    if (result.state === 'removed') {
+      removed.push(result.file.path);
+    } else if (result.state === 'preserved') {
+      preservedFiles.push(result.file);
+    } else {
+      failedFiles.push(result.file);
+      cleanupFailures.push({ path: result.file.path, message: result.message });
+    }
+  }
+
+  // Ownership survives for files that still exist so a later run can clean them up.
+  const ownedFiles = cleanupEligible
+    ? mergeOwnedFiles(currentFiles, preservedFiles, failedFiles)
+    : mergeOwnedFiles(previousOwned, currentFiles);
+  const status = crawlSucceeded && cleanupFailures.length === 0 ? ('success' as const) : ('partial' as const);
+  const preserved = preservedFiles.map((file) => file.path);
+
+  const downloadedAt = new Date().toISOString();
+  const runId = `${downloadedAt.replaceAll(':', '-')}-${randomUUID().slice(0, 8)}`;
+  const manifest = {
+    schemaVersion: 1,
+    runId,
+    status,
+    provider: run.provider,
+    source: run.source,
+    scopePath: run.scopePath,
+    scopePaths: run.scopePaths,
+    downloadedAt,
+    pagesDownloaded: run.pagesDownloaded,
+    mediaDownloaded: run.mediaDownloaded,
+    indexesDownloaded: run.indexesDownloaded,
+    pages: [...run.pages].sort((left, right) => left.url.localeCompare(right.url)),
+    strategies: run.strategies,
+    failures: run.failures,
+    truncated: run.truncated,
+    files: currentFiles,
+    ownedFiles,
+    cleanup: {
+      enabled: run.cleanupEnabled,
+      eligible: cleanupEligible,
       removed,
-      preserved: preservedFiles.map((file) => file.path),
-      cleanupFailures,
-    } satisfies ManifestResult;
-  });
+      preserved,
+      failures: cleanupFailures,
+    },
+  };
+
+  yield* outputBoundary.writeFile(path.join(rootDirectory, manifestFilename), `${JSON.stringify(manifest, null, 2)}\n`);
+
+  return { status, removed, preserved, cleanupFailures } satisfies ManifestResult;
+});

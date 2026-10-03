@@ -49,6 +49,7 @@ export default defineConfig({
       typeCheck: true,
     },
     rules: {
+      'eslint/curly': ['error', 'all'],
       'eslint/no-unused-vars': 'error',
       'typescript/consistent-type-imports': [
         'error',

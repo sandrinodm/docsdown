@@ -14,6 +14,23 @@ import { ArchiveRunError, runArchive } from './archive-run.js';
 const TestLayer = Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerFetch);
 
 /**
+ * Delays the final rename of `second.md` so its write completes after later-claimed pages.
+ */
+const SlowSecondWriteLayer = Layer.effect(
+  FileSystem.FileSystem,
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    return {
+      ...fileSystem,
+      rename: (from: string, to: string) =>
+        path.basename(to) === 'second.md'
+          ? Effect.sleep('40 millis').pipe(Effect.andThen(fileSystem.rename(from, to)))
+          : fileSystem.rename(from, to),
+    };
+  })
+).pipe(Layer.provideMerge(TestLayer));
+
+/**
  * Temporary roots removed after each test.
  */
 const temporaryDirectories: Array<string> = [];
@@ -31,7 +48,10 @@ const listen = async (handler: RequestListener) => {
     });
   });
   const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Missing test server address');
+  if (!address || typeof address === 'string') {
+    throw new Error('Missing test server address');
+  }
+
   return {
     origin: `http://127.0.0.1:${address.port}`,
     /**
@@ -160,7 +180,7 @@ describe('archive run', () => {
             ),
           { concurrency: 'unbounded' }
         ).pipe(Effect.as({ truncated: false }))
-    ).pipe(Effect.provide(TestLayer), Effect.runPromise);
+    ).pipe(Effect.provide(SlowSecondWriteLayer), Effect.runPromise);
 
     expect(summary.pages.map((page) => page.title)).toEqual(['first', 'second', 'third']);
     const manifest = JSON.parse(await readFile(path.join(rootDirectory, 'manifest.json'), 'utf8'));
@@ -246,8 +266,11 @@ describe('archive run', () => {
         response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': '1' });
         response.end(content);
       };
-      if (slow) setTimeout(complete, 20);
-      else complete();
+      if (slow) {
+        setTimeout(complete, 20);
+      } else {
+        complete();
+      }
     });
     const rootDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-archive-run-test-'));
     temporaryDirectories.push(rootDirectory);
@@ -297,17 +320,22 @@ describe('archive run', () => {
     let knownSizeRequests = 0;
     const observedMediaFailures: Array<{ readonly url: string; readonly message: string }> = [];
     const server = await listen((request, response) => {
-      if (request.url === '/known.png') knownSizeRequests += 1;
+      if (request.url === '/known.png') {
+        knownSizeRequests += 1;
+      }
+
       if (request.url?.startsWith('/missing')) {
         response.writeHead(404);
         response.end();
         return;
       }
+
       if (request.url === '/declared.png') {
         response.writeHead(200, { 'content-type': 'image/png', 'content-length': '5' });
         response.end(new Uint8Array([1, 2, 3, 4, 5]));
         return;
       }
+
       response.writeHead(200, { 'content-type': 'image/png', 'transfer-encoding': 'chunked' });
       response.write(new Uint8Array([1, 2, 3]));
       response.end(new Uint8Array([4, 5]));
@@ -387,7 +415,6 @@ describe('archive run', () => {
         { url: `${server.origin}/missing-no-context.png`, message: 'HTTP 404' },
       ]);
       expect(observedMediaFailures).toEqual(summary.failures.slice(1));
-      expect(summary.historyManifest).toBeUndefined();
       const manifest = JSON.parse(await readFile(path.join(rootDirectory, 'manifest.json'), 'utf8'));
       expect(manifest.status).toBe('partial');
       expect(manifest.cleanup.eligible).toBe(false);

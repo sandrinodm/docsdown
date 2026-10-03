@@ -1,8 +1,9 @@
 import * as path from 'node:path';
-import { Console, Effect, Schema } from 'effect';
+import { Console, Effect, Redacted, Result, Schema } from 'effect';
 import * as HttpClient from 'effect/http/HttpClient';
 import { runArchive } from './archive-run.js';
-import type { DownloadOptions, DownloadSummary } from './providers.js';
+import { DownloadError, parseInput } from './errors.js';
+import type { DownloadOptions } from './providers.js';
 import {
   isSafeGitHubPath,
   parseGitHubUrl,
@@ -11,7 +12,7 @@ import {
   type GitHubTarget,
 } from './github-snapshot.js';
 import { localizeDocument, type LocalizationPolicy } from './markdown.js';
-import { mediaFilePath } from './paths.js';
+import { mediaFilePath, safeDecode } from './paths.js';
 import { packageUserAgent } from './package.js';
 
 export { parseGitHubUrl, resolveGitHubScopes, type GitHubTarget } from './github-snapshot.js';
@@ -85,11 +86,11 @@ const TreeResponse = Schema.Struct({
 /**
  * Produces headers accepted by the versioned GitHub REST API.
  */
-const githubHeaders = (token: string | undefined, accept: string): Record<string, string> => ({
+const githubHeaders = (token: Redacted.Redacted<string> | undefined, accept: string): Record<string, string> => ({
   accept,
   'user-agent': packageUserAgent,
   'x-github-api-version': '2022-11-28',
-  ...(token ? { authorization: `Bearer ${token}` } : {}),
+  ...(token ? { authorization: `Bearer ${Redacted.value(token)}` } : {}),
 });
 
 /**
@@ -100,62 +101,90 @@ const encodeRepositoryPath = (value: string): string => value.split('/').map(enc
 /**
  * Converts unsuccessful REST responses into provider failures before reading their bodies.
  */
-const requireSuccess = (status: number, url: URL): Effect.Effect<void, Error> =>
-  status >= 200 && status < 300 ? Effect.void : Effect.fail(new Error(`HTTP ${status} for ${url.href}`));
+const requireSuccess = (status: number, url: URL): Effect.Effect<void, DownloadError> =>
+  status >= 200 && status < 300
+    ? Effect.void
+    : Effect.fail(new DownloadError({ url: url.href, message: `HTTP ${status} for ${url.href}` }));
 
 /**
  * Fetches and validates JSON from a GitHub REST endpoint.
  */
-const requestJson = <A, I, R>(url: URL, schema: Schema.Codec<A, I, R, unknown>, token: string | undefined) =>
+const requestJson = <A, I, R>(
+  url: URL,
+  schema: Schema.Codec<A, I, R, unknown>,
+  token: Redacted.Redacted<string> | undefined
+) =>
   Effect.gen(function* () {
     const response = yield* HttpClient.get(url, {
       headers: githubHeaders(token, 'application/vnd.github+json'),
     });
     yield* requireSuccess(response.status, url);
+
     const json = yield* response.json;
     return yield* Schema.decodeUnknownEffect(schema)(json);
   });
 
 /**
- * Maps one repository path to the GitHub browser URL recorded as its source.
+ * Percent-encodes the `owner/repository` pair used by every GitHub URL shape.
  */
-const browserFileUrl = (config: GitHubProviderConfig, target: GitHubTarget, ref: string, filePath: string): URL =>
-  new URL(
-    `${config.webBaseUrl}/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/blob/${encodeURIComponent(ref)}/${encodeRepositoryPath(filePath)}`
-  );
+const repositorySlug = (target: GitHubTarget): string =>
+  `${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}`;
 
 /**
- * Maps one repository path to the raw Contents API endpoint used for authenticated downloads.
+ * Builds a REST endpoint beneath `/repos/{owner}/{repository}`.
  */
-const contentsUrl = (config: GitHubProviderConfig, target: GitHubTarget, ref: string, filePath: string): URL => {
-  const url = new URL(
-    `${config.apiBaseUrl}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/contents/${encodeRepositoryPath(filePath)}`
-  );
-  url.searchParams.set('ref', ref);
-  return url;
+const repositoryApiUrl = (config: GitHubProviderConfig, target: GitHubTarget, suffix = ''): URL =>
+  new URL(`${config.apiBaseUrl}/repos/${repositorySlug(target)}${suffix}`);
+
+/**
+ * URL builders for files of one repository at one ref.
+ */
+const makeFileUrls = (config: GitHubProviderConfig, target: GitHubTarget, ref: string) => {
+  const slug = repositorySlug(target);
+  const encodedRef = encodeURIComponent(ref);
+
+  return {
+    /**
+     * Browser URL recorded in manifests and frontmatter as the page source.
+     */
+    browser: (filePath: string): URL =>
+      new URL(`${config.webBaseUrl}/${slug}/blob/${encodedRef}/${encodeRepositoryPath(filePath)}`),
+
+    /**
+     * Contents API endpoint used for authenticated downloads.
+     */
+    contents: (filePath: string): URL => {
+      const url = repositoryApiUrl(config, target, `/contents/${encodeRepositoryPath(filePath)}`);
+      url.searchParams.set('ref', ref);
+      return url;
+    },
+
+    /**
+     * Raw-content endpoint used for unauthenticated public downloads.
+     */
+    rawDownload: (filePath: string): URL =>
+      new URL(`${config.rawBaseUrl}/${slug}/${encodedRef}/${encodeRepositoryPath(filePath)}`),
+
+    /**
+     * Canonical raw URL that relative links inside a Markdown file are resolved against.
+     *
+     * This always uses the public GitHub host, independent of `config`, so links written as absolute
+     * `raw.githubusercontent.com` or `github.com/.../blob/...` URLs are recognized as repository files.
+     */
+    linkBase: (filePath: string): URL =>
+      new URL(`https://raw.githubusercontent.com/${slug}/${encodedRef}/${encodeRepositoryPath(filePath)}`),
+  };
 };
-
-/**
- * Maps one public repository path to GitHub's raw-content delivery origin.
- */
-const rawDownloadUrl = (config: GitHubProviderConfig, target: GitHubTarget, ref: string, filePath: string): URL =>
-  new URL(
-    `${config.rawBaseUrl}/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/${encodeURIComponent(ref)}/${encodeRepositoryPath(filePath)}`
-  );
-
-/**
- * Produces the virtual raw URL used to resolve relative links inside repository Markdown.
- */
-const rawFileUrl = (target: GitHubTarget, ref: string, filePath: string): URL =>
-  new URL(
-    `https://raw.githubusercontent.com/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/${encodeURIComponent(ref)}/${encodeRepositoryPath(filePath)}`
-  );
 
 /**
  * Recovers a repository-relative path from raw-content or GitHub blob URLs for the selected repository and ref.
  */
 const repositoryPathFromUrl = (url: URL, target: GitHubTarget, ref: string): string | undefined => {
-  const segments = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
+  const segments = url.pathname
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => safeDecode(segment));
+
   let candidate: string | undefined;
   if (
     url.hostname === 'raw.githubusercontent.com' &&
@@ -173,6 +202,7 @@ const repositoryPathFromUrl = (url: URL, target: GitHubTarget, ref: string): str
   ) {
     candidate = segments.slice(4).join('/');
   }
+
   return candidate && isSafeGitHubPath(candidate) ? candidate : undefined;
 };
 
@@ -193,6 +223,7 @@ const repositoryMediaDestination = (rootDirectory: string, repositoryPath: strin
  */
 const fallbackTitle = (repositoryPath: string): string => {
   const filename = path.posix.basename(repositoryPath).replace(/\.(?:md|mdx|markdown)$/i, '');
+
   return filename.replace(/[-_]+/g, ' ').trim() || repositoryPath;
 };
 
@@ -219,192 +250,200 @@ const withGitHubFrontmatter = (markdown: string, source: URL, title: string, ref
  * The recursive Git tree discovers files without the Contents endpoint's 1,000-entry directory limit. A truncated tree
  * produces a partial manifest and suppresses stale cleanup, preventing incomplete discovery from deleting prior files.
  */
-export const downloadGitHubRepository = (
+export const downloadGitHubRepository = Effect.fn('downloadGitHubRepository')(function* (
   options: DownloadOptions & {
-    readonly githubToken?: string;
+    readonly githubToken?: Redacted.Redacted<string>;
     readonly githubPaths?: ReadonlyArray<string>;
   },
   config: GitHubProviderConfig
-) =>
-  Effect.gen(function* () {
-    const target = parseGitHubUrl(options.url);
-    const requestedScopes = resolveGitHubScopes(target, options.githubPaths ?? []);
-    const rootDirectory = path.resolve(options.outputDirectory);
-    /**
-     * Preserves request-level media diagnostics without exposing archive bookkeeping to the provider.
-     */
-    const logMediaFailure = (failure: { readonly url: string; readonly message: string }) =>
-      Console.log(`Skipped media ${failure.url}: ${failure.message}`);
-    return yield* runArchive(
-      {
-        provider: 'github',
-        source: options.url,
-        scopePath: target.repositoryPath || '/',
-        scopePaths: requestedScopes.length === 0 ? ['/'] : requestedScopes,
-        outputDirectory: rootDirectory,
-        concurrency: options.concurrency,
-        maxMediaBytes: options.maxMediaBytes,
-        cleanupEnabled: !options.keepStale,
-        ...(options.verbose ? { onMediaFailure: logMediaFailure } : {}),
-      },
-      (archive) =>
-        Effect.gen(function* () {
-          let ref = target.ref;
-          let defaultRef: string | undefined;
-          if (!ref) {
-            const repositoryUrl = new URL(
-              `${config.apiBaseUrl}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}`
-            );
-            const repository = yield* requestJson(repositoryUrl, RepositoryResponse, options.githubToken);
-            defaultRef = repository.default_branch;
-            ref = defaultRef;
-          }
+) {
+  const target = yield* parseInput(() => parseGitHubUrl(options.url));
+  const requestedScopes = yield* parseInput(() => resolveGitHubScopes(target, options.githubPaths ?? []));
+  const rootDirectory = path.resolve(options.outputDirectory);
+  const token = options.githubToken;
 
-          const treeUrl = new URL(
-            `${config.apiBaseUrl}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repository)}/git/trees/${encodeURIComponent(ref)}`
-          );
-          treeUrl.searchParams.set('recursive', '1');
-          const tree = yield* requestJson(treeUrl, TreeResponse, options.githubToken);
-          const plan = planGitHubSnapshot({
+  return yield* runArchive(
+    {
+      provider: 'github',
+      source: options.url,
+      scopePath: target.repositoryPath || '/',
+      scopePaths: requestedScopes.length === 0 ? ['/'] : requestedScopes,
+      outputDirectory: rootDirectory,
+      concurrency: options.concurrency,
+      maxMediaBytes: options.maxMediaBytes,
+      cleanupEnabled: !options.keepStale,
+      ...(options.verbose
+        ? {
+            /**
+             * Reports recoverable media failures without changing the run result.
+             */
+            onMediaFailure: (failure: { readonly url: string; readonly message: string }) =>
+              Console.log(`Skipped media ${failure.url}: ${failure.message}`),
+          }
+        : {}),
+    },
+    (archive) =>
+      Effect.gen(function* () {
+        // URLs without a branch, tag, or commit archive the repository's default branch.
+        const ref =
+          target.ref ??
+          (yield* requestJson(repositoryApiUrl(config, target), RepositoryResponse, token)).default_branch;
+        const fileUrls = makeFileUrls(config, target, ref);
+
+        const treeUrl = repositoryApiUrl(config, target, `/git/trees/${encodeURIComponent(ref)}`);
+        treeUrl.searchParams.set('recursive', '1');
+        const tree = yield* requestJson(treeUrl, TreeResponse, token);
+
+        const plan = yield* parseInput(() =>
+          planGitHubSnapshot({
             url: options.url,
-            ...(defaultRef !== undefined ? { defaultRef } : {}),
+            defaultRef: ref,
             includes: options.githubPaths ?? [],
             ...(options.maxPages === undefined ? {} : { maxPages: options.maxPages }),
             singlePage: options.singlePage,
             tree: { truncated: tree.truncated, entries: tree.tree },
+          })
+        );
+
+        if (plan.markdown.length === 0) {
+          return yield* new DownloadError({ url: options.url, message: `No Markdown files found in ${options.url}` });
+        }
+
+        if (tree.truncated) {
+          yield* archive.recordFailure({
+            url: treeUrl.href,
+            message: 'GitHub truncated the recursive repository tree',
           });
-          const selectedMarkdown = plan.markdown;
-          if (selectedMarkdown.length === 0) {
-            return yield* Effect.fail(new Error(`No Markdown files found in ${options.url}`));
-          }
+        }
 
-          if (tree.truncated) {
-            yield* archive.recordFailure({
-              url: treeUrl.href,
-              message: 'GitHub truncated the recursive repository tree',
-            });
-          }
-          const selectedPaths = new Set(selectedMarkdown.map((entry) => entry.path));
-          const localizationPolicy: LocalizationPolicy = {
-            /**
-             * Rewrites links only when their repository documents belong to this snapshot.
-             */
-            pageFile: (url) => {
-              const repositoryPath = repositoryPathFromUrl(url, target, ref);
-              return repositoryPath && selectedPaths.has(repositoryPath)
-                ? pageDestination(rootDirectory, repositoryPath)
-                : undefined;
-            },
-            /**
-             * Mirrors repository media separately from external media grouped by origin.
-             */
-            mediaFile: (url) => {
-              const repositoryPath = repositoryPathFromUrl(url, target, ref);
-              return repositoryPath
-                ? repositoryMediaDestination(rootDirectory, repositoryPath)
-                : mediaFilePath(rootDirectory, url);
-            },
-          };
-
+        const selectedPaths = new Set(plan.markdown.map((entry) => entry.path));
+        const localizationPolicy: LocalizationPolicy = {
           /**
-           * Downloads, localizes, and records one planned repository Markdown file.
+           * Rewrites links only when their repository documents belong to this snapshot.
            */
-          const processPage = (entry: (typeof selectedMarkdown)[number], order: number) =>
-            Effect.gen(function* () {
-              const requestUrl = options.githubToken
-                ? contentsUrl(config, target, ref, entry.path)
-                : rawDownloadUrl(config, target, ref, entry.path);
-              if (options.verbose) yield* Console.log(`Fetching ${entry.path}`);
-              const response = yield* HttpClient.get(requestUrl, {
-                headers: options.githubToken
-                  ? githubHeaders(options.githubToken, 'application/vnd.github.raw+json')
-                  : { accept: 'text/markdown, text/plain;q=0.9', 'user-agent': packageUserAgent },
-              });
-              yield* requireSuccess(response.status, requestUrl);
-              const pageFile = pageDestination(rootDirectory, entry.path);
-              const pageUrl = rawFileUrl(target, ref, entry.path);
-              const localized = localizeDocument(
-                {
-                  format: entry.path.toLowerCase().endsWith('.mdx') ? 'mdx' : 'markdown',
-                  source: yield* response.text,
-                  url: pageUrl,
-                  file: pageFile,
-                },
-                localizationPolicy
-              );
-              const title = localized.title ?? fallbackTitle(entry.path);
-              const sourceUrl = browserFileUrl(config, target, ref, entry.path);
-              yield* Effect.forEach(
-                localized.media,
-                (mediaUrl) => {
-                  const repositoryPath = repositoryPathFromUrl(mediaUrl, target, ref);
-                  const destination = localizationPolicy.mediaFile(mediaUrl) as string;
-                  const requestUrl = repositoryPath
-                    ? options.githubToken
-                      ? contentsUrl(config, target, ref, repositoryPath)
-                      : rawDownloadUrl(config, target, ref, repositoryPath)
-                    : mediaUrl;
-                  const knownBytes = repositoryPath === undefined ? undefined : plan.blobSize(repositoryPath);
-                  return archive.downloadMedia({
-                    url: mediaUrl.href,
-                    requestUrl: requestUrl.href,
-                    httpErrorUrl: requestUrl.href,
-                    destination,
-                    headers:
-                      repositoryPath && options.githubToken
-                        ? githubHeaders(options.githubToken, 'application/vnd.github.raw+json')
-                        : { accept: 'image/*,video/*,*/*;q=0.1', 'user-agent': packageUserAgent },
-                    ...(knownBytes !== undefined ? { knownBytes } : {}),
-                  });
-                },
-                { concurrency: options.concurrency }
-              );
-              yield* archive.writePage({
-                url: sourceUrl.href,
-                title,
-                strategy: 'github-raw',
-                order,
-                destination: pageFile,
-                content: withGitHubFrontmatter(localized.markdown, sourceUrl, title, ref),
-              });
-              if (!options.verbose) yield* Console.log(`Downloaded ${entry.path}`);
-            });
+          pageFile: (url) => {
+            const repositoryPath = repositoryPathFromUrl(url, target, ref);
+            return repositoryPath && selectedPaths.has(repositoryPath)
+              ? pageDestination(rootDirectory, repositoryPath)
+              : undefined;
+          },
+          /**
+           * Mirrors repository media separately from external media grouped by origin.
+           */
 
-          const results = yield* Effect.forEach(
-            selectedMarkdown,
-            (entry, order) =>
-              processPage(entry, order).pipe(
-                Effect.match({
-                  /**
-                   * Retains the canonical browser URL for ordered partial-run reporting.
-                   */
-                  onFailure: (error) => ({
-                    ok: false as const,
-                    url: browserFileUrl(config, target, ref, entry.path),
-                    error,
-                  }),
-                  /**
-                   * Marks successful persistence without exposing provider-local page details.
-                   */
-                  onSuccess: () => ({ ok: true as const }),
-                })
-              ),
-            { concurrency: options.concurrency }
+          mediaFile: (url) => {
+            const repositoryPath = repositoryPathFromUrl(url, target, ref);
+            return repositoryPath
+              ? repositoryMediaDestination(rootDirectory, repositoryPath)
+              : mediaFilePath(rootDirectory, url);
+          },
+        };
+
+        /**
+         * Chooses how to fetch a repository file: the Contents API with the token, or public raw content without it.
+         */
+        const repositoryFileRequest = (filePath: string, publicAccept: string) =>
+          token
+            ? { url: fileUrls.contents(filePath), headers: githubHeaders(token, 'application/vnd.github.raw+json') }
+            : {
+                url: fileUrls.rawDownload(filePath),
+                headers: { accept: publicAccept, 'user-agent': packageUserAgent },
+              };
+
+        /**
+         * Downloads one referenced image or video, reading repository files through the same channel as pages.
+         *
+         * The repository token is never sent to external media hosts.
+         */
+        const downloadMedia = (mediaUrl: URL) => {
+          const mediaAccept = 'image/*,video/*,*/*;q=0.1';
+          const repositoryPath = repositoryPathFromUrl(mediaUrl, target, ref);
+          const request =
+            repositoryPath === undefined
+              ? { url: mediaUrl, headers: { accept: mediaAccept, 'user-agent': packageUserAgent } }
+              : repositoryFileRequest(repositoryPath, mediaAccept);
+
+          const knownBytes = repositoryPath === undefined ? undefined : plan.blobSize(repositoryPath);
+
+          return archive.downloadMedia({
+            url: mediaUrl.href,
+            requestUrl: request.url.href,
+            httpErrorUrl: request.url.href,
+            destination: localizationPolicy.mediaFile(mediaUrl) as string,
+            headers: request.headers,
+            ...(knownBytes !== undefined ? { knownBytes } : {}),
+          });
+        };
+
+        /**
+         * Downloads, localizes, and records one planned repository Markdown file.
+         */
+        const processPage = Effect.fnUntraced(function* (filePath: string, order: number) {
+          if (options.verbose) {
+            yield* Console.log(`Fetching ${filePath}`);
+          }
+
+          const request = repositoryFileRequest(filePath, 'text/markdown, text/plain;q=0.9');
+          const response = yield* HttpClient.get(request.url, { headers: request.headers });
+          yield* requireSuccess(response.status, request.url);
+
+          const pageFile = pageDestination(rootDirectory, filePath);
+          const localized = localizeDocument(
+            {
+              format: filePath.toLowerCase().endsWith('.mdx') ? 'mdx' : 'markdown',
+              source: yield* response.text,
+              url: fileUrls.linkBase(filePath),
+              file: pageFile,
+            },
+            localizationPolicy
           );
-          let pagesDownloaded = 0;
-          for (const result of results) {
-            if (result.ok) {
-              pagesDownloaded += 1;
-              continue;
-            }
-            const message = result.error.message;
-            yield* archive.recordFailure({ url: result.url.href, message });
-            yield* Console.log(`Failed ${result.url.href}: ${message}`);
+          yield* Effect.forEach(localized.media, (mediaUrl) => downloadMedia(mediaUrl), {
+            concurrency: options.concurrency,
+          });
+
+          const title = localized.title ?? fallbackTitle(filePath);
+          const sourceUrl = fileUrls.browser(filePath);
+          yield* archive.writePage({
+            url: sourceUrl.href,
+            title,
+            strategy: 'github-raw',
+            order,
+            destination: pageFile,
+            content: withGitHubFrontmatter(localized.markdown, sourceUrl, title, ref),
+          });
+
+          if (!options.verbose) {
+            yield* Console.log(`Downloaded ${filePath}`);
           }
-          if (pagesDownloaded === 0) {
-            return yield* Effect.fail(new Error(`No Markdown files could be downloaded from ${options.url}`));
+        });
+
+        const results = yield* Effect.forEach(
+          plan.markdown,
+          ({ path: filePath }, order) =>
+            Effect.result(processPage(filePath, order)).pipe(Effect.map((result) => ({ filePath, result }))),
+          { concurrency: options.concurrency }
+        );
+
+        let pagesDownloaded = 0;
+        for (const { filePath, result } of results) {
+          if (Result.isSuccess(result)) {
+            pagesDownloaded += 1;
+            continue;
           }
-          return { truncated: plan.truncated };
-        })
-    ).pipe(Effect.map((summary) => summary satisfies DownloadSummary));
-  });
+
+          const url = fileUrls.browser(filePath).href;
+          yield* archive.recordFailure({ url, message: result.failure.message });
+          yield* Console.log(`Failed ${url}: ${result.failure.message}`);
+        }
+
+        if (pagesDownloaded === 0) {
+          return yield* new DownloadError({
+            url: options.url,
+            message: `No Markdown files could be downloaded from ${options.url}`,
+          });
+        }
+
+        return { truncated: plan.truncated };
+      })
+  );
+});

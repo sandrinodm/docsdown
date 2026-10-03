@@ -1,5 +1,5 @@
 import { NodeHttpClient, NodeServices } from '@effect/platform-node';
-import { Effect, Layer } from 'effect';
+import { Effect, Layer, Redacted } from 'effect';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -26,7 +26,10 @@ const listen = async (handler: RequestListener) => {
     });
   });
   const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Missing test server address');
+  if (!address || typeof address === 'string') {
+    throw new Error('Missing test server address');
+  }
+
   return {
     origin: `http://127.0.0.1:${address.port}`,
     close: async () => {
@@ -44,6 +47,7 @@ describe('managed archive updates', () => {
         response.end('# Managed docs\n');
         return;
       }
+
       response.writeHead(404).end('missing');
     });
     const partialServer = await listen((request, response) => {
@@ -52,6 +56,7 @@ describe('managed archive updates', () => {
         response.end('# Partial docs\n\n![Missing](/missing.png)\n');
         return;
       }
+
       response.writeHead(404).end('missing');
     });
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-update-test-'));
@@ -96,13 +101,25 @@ describe('managed archive updates', () => {
         makeArchiveConfig({ ...downloadOptions, url: `${partialServer.origin}/docs` }, 'website')
       ).pipe(Effect.provide(TestLayer), Effect.runPromise);
 
+      const unparseableRoot = path.join(outputDirectory, 'unparseable');
+      await mkdir(unparseableRoot);
+      await writeArchiveConfig(
+        unparseableRoot,
+        makeArchiveConfig({ ...downloadOptions, url: 'https://github.com/acme' }, 'github')
+      ).pipe(Effect.provide(TestLayer), Effect.runPromise);
+
       const authenticated = await updateDocumentationArchives({
         outputDirectory,
-        githubToken: 'runtime-only-token',
+        githubToken: Redacted.make('runtime-only-token'),
       }).pipe(Effect.provide(TestLayer), Effect.runPromise);
-      expect(authenticated).toMatchObject({ configsFound: 4, archivesUpdated: 1 });
-      expect(authenticated.failures).toHaveLength(3);
+      expect(authenticated).toMatchObject({ configsFound: 5, archivesUpdated: 1 });
+      expect(authenticated.failures).toHaveLength(4);
+      expect(authenticated.failures).toContainEqual({
+        configPath: path.join(unparseableRoot, archiveConfigFilename),
+        message: 'GitHub URLs must include an owner and repository',
+      });
       expect(authenticated.failures.map((failure) => failure.message).join('\n')).toContain('Archive remained partial');
+      expect(authenticated.failures.map((failure) => failure.message).join('\n')).toMatch(/Invalid JSON: .*JSON/);
       expect(await readFile(path.join(initial.rootDirectory, archiveConfigFilename), 'utf8')).not.toContain(
         'runtime-only-token'
       );

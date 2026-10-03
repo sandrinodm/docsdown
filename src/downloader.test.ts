@@ -1,6 +1,6 @@
 import { NodeHttpClient, NodeServices } from '@effect/platform-node';
 import { Effect, Layer } from 'effect';
-import { access, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer, type RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -20,7 +20,10 @@ const listen = async (handler: RequestListener) => {
     });
   });
   const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Missing test server address');
+  if (!address || typeof address === 'string') {
+    throw new Error('Missing test server address');
+  }
+
   return {
     origin: `http://127.0.0.1:${address.port}`,
     close: async () => {
@@ -54,6 +57,7 @@ describe('documentation download', () => {
         response.end('# Documentation\n\n[Content page](/docs/content.md)\n');
         return;
       }
+
       if (request.url === '/docs' && request.headers.accept?.startsWith('text/html')) {
         response.writeHead(200, { 'content-type': 'text/html' });
         response.end(
@@ -61,16 +65,19 @@ describe('documentation download', () => {
         );
         return;
       }
+
       if (request.url === '/docs/child.md') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
         response.end('# Child\n');
         return;
       }
+
       if (request.url === '/docs/content.md') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
         response.end('# Content\n');
         return;
       }
+
       response.writeHead(404).end('missing');
     });
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
@@ -98,16 +105,19 @@ describe('documentation download', () => {
         response.end('# Documentation\n\n<img src={__img0} />\n');
         return;
       }
+
       if (request.url === '/docs') {
         response.writeHead(200, { 'content-type': 'text/html' });
         response.end('<html><body><main><h1>Documentation</h1><img src="/diagram.png"></main></body></html>');
         return;
       }
+
       if (request.url === '/diagram.png') {
         response.writeHead(200, { 'content-type': 'image/png', 'content-length': '1' });
         response.end(new Uint8Array([1]));
         return;
       }
+
       response.writeHead(404).end('missing');
     });
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
@@ -133,15 +143,18 @@ describe('documentation download', () => {
         response.writeHead(404).end('missing');
         return;
       }
+
       if (request.url === '/en/') {
         response.writeHead(200, { 'content-type': 'text/html' });
         response.end('<!doctype html><meta http-equiv="refresh" content="0;url=/en/start/">');
         return;
       }
+
       if (request.url === '/en/start.md') {
         response.writeHead(404).end('missing');
         return;
       }
+
       if (request.url === '/en/start/') {
         response.writeHead(200, { 'content-type': 'text/html' });
         response.end(
@@ -149,11 +162,13 @@ describe('documentation download', () => {
         );
         return;
       }
+
       if (request.url === '/en/guide.md') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
         response.end('# Guide\n');
         return;
       }
+
       if (request.url === '/en/broken/') {
         response.writeHead(200, { 'content-type': 'text/html' });
         response.end(
@@ -161,6 +176,7 @@ describe('documentation download', () => {
         );
         return;
       }
+
       if (request.url === '/en/external/') {
         response.writeHead(200, { 'content-type': 'text/html' });
         response.end(
@@ -168,6 +184,7 @@ describe('documentation download', () => {
         );
         return;
       }
+
       if (request.url === '/en/ftp/') {
         response.writeHead(200, { 'content-type': 'text/html' });
         response.end(
@@ -175,6 +192,7 @@ describe('documentation download', () => {
         );
         return;
       }
+
       response.writeHead(404).end('missing');
     });
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
@@ -192,9 +210,49 @@ describe('documentation download', () => {
         { url: `${server.origin}/en/external/`, title: 'External refresh' },
         { url: `${server.origin}/en/ftp/`, title: 'FTP refresh' },
       ]);
-      expect(await readFile(path.join(summary.rootDirectory, 'content', 'en', 'index.md'), 'utf8')).toContain(
-        '# Start'
+      expect(await readFile(path.join(summary.rootDirectory, 'content', 'en.md'), 'utf8')).toContain('# Start');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('stores URL aliases at one destination so trailing-slash links resolve locally', async () => {
+    const server = await listen((request, response) => {
+      if (request.url === '/docs.md') {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        response.end('# Docs\n\n[Guide](/docs/guide/#setup) and [Reference](/docs/reference/index.html)\n');
+        return;
+      }
+
+      if (request.url === '/docs/guide.md') {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        response.end('# Guide\n\n[Back](/docs/)\n');
+        return;
+      }
+
+      if (request.url === '/docs/reference/index.html.md') {
+        response.writeHead(200, { 'content-type': 'text/markdown' });
+        response.end('# Reference\n');
+        return;
+      }
+
+      response.writeHead(404).end('missing');
+    });
+    const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
+    temporaryDirectories.push(outputDirectory);
+    try {
+      const summary = await downloadSite(options(`${server.origin}/docs`, outputDirectory, { singlePage: false })).pipe(
+        Effect.provide(TestLayer),
+        Effect.runPromise
       );
+
+      expect(summary.pages.map((page) => page.title)).toEqual(['Docs', 'Guide', 'Reference']);
+      const content = path.join(summary.rootDirectory, 'content');
+      const docs = await readFile(path.join(content, 'docs.md'), 'utf8');
+      expect(docs).toContain('[Guide](./docs/guide.md#setup)');
+      expect(docs).toContain('[Reference](./docs/reference.md)');
+      expect(await readFile(path.join(content, 'docs', 'guide.md'), 'utf8')).toContain('[Back](../docs.md)');
+      await access(path.join(content, 'docs', 'reference.md'));
     } finally {
       await server.close();
     }
@@ -207,11 +265,13 @@ describe('documentation download', () => {
         response.end('<html><body>Not Markdown</body></html>');
         return;
       }
+
       if (request.url === '/html' && request.headers.accept === 'text/markdown') {
         response.writeHead(200, { 'content-type': 'text/html' });
         response.end('<html><body>Still HTML</body></html>');
         return;
       }
+
       if (request.url === '/html') {
         response.writeHead(200, { 'content-type': 'text/html' });
         response.end(
@@ -219,6 +279,7 @@ describe('documentation download', () => {
         );
         return;
       }
+
       response.writeHead(404).end('missing');
     });
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
@@ -230,7 +291,6 @@ describe('documentation download', () => {
 
       expect(summary.rootDirectory).toBe(path.resolve(outputDirectory));
       expect(summary.truncated).toBe(true);
-      expect(summary.historyManifest).toBeUndefined();
       const page = await readFile(path.join(summary.rootDirectory, 'content', 'html.md'), 'utf8');
       expect(page).toContain('download_strategy: "html-conversion"');
       expect(page).toContain('title: "HTML Docs"');
@@ -252,6 +312,7 @@ describe('documentation download', () => {
         response.end('<html><body>Probe response</body></html>');
         return;
       }
+
       response.writeHead(200);
       response.end('Plain fallback body.');
     });
@@ -279,11 +340,13 @@ describe('documentation download', () => {
         response.end('Root body.\n\n![Missing](/missing.png)');
         return;
       }
+
       if (request.url === '/.md.md') {
         response.writeHead(200, { 'content-type': 'text/plain' });
         response.end('Extension-only body.');
         return;
       }
+
       response.writeHead(404).end('missing');
     });
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
@@ -314,27 +377,32 @@ describe('documentation download', () => {
         response.end(body('Root', '[Child](/docs/child) [Broken](/docs/broken) [Outside](/elsewhere)'));
         return;
       }
+
       if (request.url === '/docs/child.md') {
         response.writeHead(200, { 'content-type': 'application/x-markdown' });
         response.end(body('Child', '[Root](/docs)'));
         return;
       }
+
       if (request.url === '/media/shared.png') {
         response.writeHead(200, { 'content-type': 'image/png', 'content-length': '4' });
         response.end(new Uint8Array([1, 2, 3, 4]));
         return;
       }
+
       if (request.url === '/media/declared.png') {
         response.writeHead(200, { 'content-type': 'image/png', 'content-length': '5' });
         response.end(new Uint8Array([1, 2, 3, 4, 5]));
         return;
       }
+
       if (request.url === '/media/actual.png') {
         response.writeHead(200, { 'content-type': 'image/png', 'transfer-encoding': 'chunked' });
         response.write(new Uint8Array([1, 2, 3]));
         response.end(new Uint8Array([4, 5]));
         return;
       }
+
       response.writeHead(404).end('missing');
     });
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
@@ -359,7 +427,6 @@ describe('documentation download', () => {
           message: `Unable to download ${server.origin}/docs/broken (HTTP 404, 404, 404)`,
         },
       ]);
-      expect(summary.historyManifest).toBeUndefined();
     } finally {
       await server.close();
     }
@@ -375,26 +442,31 @@ describe('documentation download', () => {
         );
         return;
       }
+
       if (request.url === '/docs/a:b.md') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
         setTimeout(() => response.end('# Colon\n'), 20);
         return;
       }
+
       if (request.url === '/docs/a-b.md') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
         response.end('# Dash\n');
         return;
       }
+
       if (request.url === '/media/a:b.png' || request.url === '/media/a-b.png') {
         mediaRequests.set(request.url, (mediaRequests.get(request.url) ?? 0) + 1);
         if (request.url === '/media/a:b.png') {
           response.writeHead(404).end('missing');
           return;
         }
+
         response.writeHead(200, { 'content-type': 'image/png', 'content-length': '1' });
         response.end(new Uint8Array([2]));
         return;
       }
+
       response.writeHead(404).end('missing');
     });
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
@@ -468,11 +540,13 @@ describe('documentation download', () => {
         );
         return;
       }
+
       if (request.url === '/llms-full.txt') {
         response.writeHead(200, { 'content-type': 'text/plain' });
         response.end('# Root full index\nSource: ./docs/from-root-full\n');
         return;
       }
+
       if (request.url === '/docs/llms.txt') {
         response.writeHead(200, { 'content-type': 'text/markdown' });
         response.end(
@@ -480,11 +554,13 @@ describe('documentation download', () => {
         );
         return;
       }
+
       if (request.url === '/docs/llms-full.txt') {
         response.writeHead(200, { 'content-type': 'text/plain' });
         response.end('# Scoped full index\nSource: ./from-scope-full\n\n[Content link](/docs/not-a-boundary)\n');
         return;
       }
+
       const titles: Readonly<Record<string, string>> = {
         '/docs.md': 'Documentation',
         '/docs/from-root.md': 'From root',
@@ -498,6 +574,7 @@ describe('documentation download', () => {
         response.end(`# ${title}\n`);
         return;
       }
+
       response.writeHead(404).end('missing');
     });
     const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
@@ -567,6 +644,7 @@ describe('documentation download', () => {
         response.writeHead(404).end('missing');
         return;
       }
+
       if (request.url === '/docs' && request.headers.accept === 'text/markdown') {
         response.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8' });
         response.end(
@@ -576,11 +654,13 @@ describe('documentation download', () => {
         );
         return;
       }
+
       if (request.url === '/docs/guide.md') {
         response.writeHead(200, { 'content-type': 'text/plain' });
         response.end('# Guide\n\nThis came from the suffix endpoint.\n');
         return;
       }
+
       if (request.url === '/media/diagram.png') {
         response.writeHead(200, {
           'content-type': 'image/png',
@@ -589,6 +669,7 @@ describe('documentation download', () => {
         response.end(image);
         return;
       }
+
       response.writeHead(404).end('missing');
     });
 
@@ -601,7 +682,10 @@ describe('documentation download', () => {
     });
     try {
       const address = server.address();
-      if (!address || typeof address === 'string') throw new Error('Missing test server address');
+      if (!address || typeof address === 'string') {
+        throw new Error('Missing test server address');
+      }
+
       const outputDirectory = await mkdtemp(path.join(tmpdir(), 'docsdown-test-'));
       temporaryDirectories.push(outputDirectory);
       const origin = `http://127.0.0.1:${address.port}`;
@@ -655,7 +739,6 @@ describe('documentation download', () => {
       await expect(
         access(path.join(summary.rootDirectory, `media/127.0.0.1-${address.port}/media/diagram.png`))
       ).rejects.toThrow();
-      expect(await readdir(path.join(summary.rootDirectory, '.manifests'))).toHaveLength(2);
 
       const updatedManifest = JSON.parse(await readFile(path.join(summary.rootDirectory, 'manifest.json'), 'utf8'));
       expect(updatedManifest.status).toBe('success');

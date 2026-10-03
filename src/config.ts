@@ -1,12 +1,26 @@
 import * as path from 'node:path';
-import { Effect, FileSystem, Schema } from 'effect';
+import { Effect, FileSystem, Option, Schema, type PlatformError } from 'effect';
+import { causeMessage, InvalidOptionsError } from './errors.js';
 import { makeOutputBoundary } from './output-boundary.js';
 import type { ProviderKind, DocumentationDownloadOptions } from './providers.js';
 
 /**
  * Reserved per-archive configuration filename discovered by `docsdown update`.
  */
-export const archiveConfigFilename = '.docsdown.json';
+export const archiveConfigFilename = 'docsdown.json';
+
+/**
+ * Hidden configuration filename written by docsdown 0.3 and earlier.
+ *
+ * It is still discovered so existing archives keep updating, and is replaced by {@link archiveConfigFilename} the next
+ * time the archive's configuration is written.
+ */
+export const legacyArchiveConfigFilename = '.docsdown.json';
+
+/**
+ * Every filename that marks a directory as an archive root.
+ */
+const configFilenames: ReadonlySet<string> = new Set([archiveConfigFilename, legacyArchiveConfigFilename]);
 
 /**
  * Non-secret crawl settings persisted for repeatable archive updates.
@@ -111,16 +125,21 @@ export type DiscoveredArchiveConfig =
     };
 
 /**
+ * Whole-number limit that must permit at least one request, page, or byte.
+ */
+const PositiveInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
+
+/**
  * Runtime decoder for untrusted per-archive JSON configuration.
  */
 const ArchiveConfigSchema = Schema.Struct({
   schemaVersion: Schema.Literal(1),
-  source: Schema.String,
+  source: Schema.NonEmptyString,
   provider: Schema.Literals(['website', 'github']),
   options: Schema.Struct({
-    concurrency: Schema.Number,
-    maxPages: Schema.optionalKey(Schema.Number),
-    maxMediaBytes: Schema.Number,
+    concurrency: PositiveInt,
+    maxPages: Schema.optionalKey(PositiveInt),
+    maxMediaBytes: PositiveInt,
     singlePage: Schema.Boolean,
     keepStale: Schema.Boolean,
     verbose: Schema.Boolean,
@@ -133,11 +152,16 @@ const ArchiveConfigSchema = Schema.Struct({
  */
 const decodeArchiveConfig = (source: string) =>
   Effect.gen(function* () {
-    const json = yield* Effect.try(() => JSON.parse(source) as unknown).pipe(
-      Effect.mapError((error) => new Error(`Invalid JSON: ${error.message}`))
-    );
+    const json = yield* Effect.try({
+      try: () => JSON.parse(source) as unknown,
+      /**
+       * Keeps the parser's position-bearing message, which the shorthand `Effect.try` form would discard.
+       */
+      catch: (cause) => new InvalidOptionsError({ message: `Invalid JSON: ${causeMessage(cause)}` }),
+    });
+
     return yield* Schema.decodeUnknownEffect(ArchiveConfigSchema)(json).pipe(
-      Effect.mapError((error) => new Error(`Invalid configuration: ${error.message}`))
+      Effect.mapError((error) => new InvalidOptionsError({ message: `Invalid configuration: ${error.message}` }))
     );
   });
 
@@ -162,65 +186,97 @@ export const makeArchiveConfig = (options: DocumentationDownloadOptions, provide
 /**
  * Writes one deterministic, human-editable archive configuration.
  */
-export const writeArchiveConfig = (rootDirectory: string, config: ArchiveConfig) =>
-  Effect.gen(function* () {
-    const outputBoundary = yield* makeOutputBoundary(rootDirectory);
-    yield* outputBoundary.writeFile(
-      path.join(rootDirectory, archiveConfigFilename),
-      `${JSON.stringify(config, null, 2)}\n`
-    );
-  });
+export const writeArchiveConfig = Effect.fn('writeArchiveConfig')(function* (
+  rootDirectory: string,
+  config: ArchiveConfig
+) {
+  const outputBoundary = yield* makeOutputBoundary(rootDirectory);
+  yield* outputBoundary.writeFile(
+    path.join(rootDirectory, archiveConfigFilename),
+    `${JSON.stringify(config, null, 2)}\n`
+  );
+
+  // Migrates archives created before the configuration file was renamed.
+  yield* outputBoundary.removeFile(path.join(rootDirectory, legacyArchiveConfigFilename));
+});
 
 /**
  * Reads and validates one untrusted archive configuration.
  */
-export const readArchiveConfig = (configPath: string) =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const source = yield* fileSystem.readFileString(configPath);
-    return yield* decodeArchiveConfig(source);
-  });
+export const readArchiveConfig = Effect.fn('readArchiveConfig')(function* (configPath: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const source = yield* fileSystem.readFileString(configPath);
+  return yield* decodeArchiveConfig(source);
+});
+
+/**
+ * Archive subdirectories whose files are written from downloaded content.
+ */
+const generatedDirectories: ReadonlySet<string> = new Set(['content', 'media']);
 
 /**
  * Finds every managed archive configuration beneath an output directory.
+ *
+ * Discovery does not descend into an archive's generated `content/` and `media/` trees, so remote documentation can
+ * never plant a configuration that `docsdown update` would then act on.
  */
-export const discoverArchiveConfigs = (outputDirectory: string) =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const rootDirectory = path.resolve(outputDirectory);
-    if (!(yield* fileSystem.exists(rootDirectory))) return [];
-    const outputBoundary = yield* makeOutputBoundary(rootDirectory);
-    const configPaths: Array<string> = [];
+export const discoverArchiveConfigs = Effect.fn('discoverArchiveConfigs')(function* (outputDirectory: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const rootDirectory = path.resolve(outputDirectory);
+  if (!(yield* fileSystem.exists(rootDirectory))) {
+    return [];
+  }
 
-    /**
-     * Walks verified real directories without allowing recursive discovery to follow symlinks.
-     */
-    const discover = (directory: string): Effect.Effect<void, unknown> =>
-      Effect.gen(function* () {
-        const entries = yield* fileSystem.readDirectory(directory);
-        for (const entry of entries.sort((left, right) => left.localeCompare(right))) {
-          if (entry === '.manifests') continue;
-          const candidate = path.join(directory, entry);
-          const safePath = yield* outputBoundary.resolveFile(candidate).pipe(
-            Effect.map((resolved) => resolved as string | undefined),
-            Effect.catch(() => Effect.succeed(undefined))
-          );
-          if (!safePath) continue;
-          const info = yield* fileSystem.stat(safePath);
-          if (info.type === 'Directory') yield* discover(safePath);
-          else if (info.type === 'File' && entry === archiveConfigFilename) configPaths.push(safePath);
+  const outputBoundary = yield* makeOutputBoundary(rootDirectory);
+  const configPaths: Array<string> = [];
+
+  /**
+   * Walks verified real directories without allowing recursive discovery to follow symlinks.
+   */
+  const discover = (directory: string): Effect.Effect<void, PlatformError.PlatformError> =>
+    Effect.gen(function* () {
+      const entries = yield* fileSystem.readDirectory(directory);
+
+      // Inside an archive, everything except the root config was produced from remote content. A downloaded file
+      // named `docsdown.json` must never be mistaken for an archive the user configured.
+      const isArchiveRoot = entries.some((entry) => configFilenames.has(entry));
+
+      // A not-yet-migrated archive may briefly hold both names; the current one wins.
+      const hasCurrentConfig = entries.includes(archiveConfigFilename);
+
+      for (const entry of entries.sort((left, right) => left.localeCompare(right))) {
+        if (isArchiveRoot && generatedDirectories.has(entry)) {
+          continue;
         }
-      });
 
-    yield* discover(rootDirectory);
-    return yield* Effect.forEach(
-      configPaths,
-      (configPath): Effect.Effect<DiscoveredArchiveConfig, never, FileSystem.FileSystem> => {
-        return outputBoundary.readFileString(configPath).pipe(
-          Effect.flatMap(decodeArchiveConfig),
-          Effect.map((config) => ({ ok: true, path: configPath, config }) as const),
-          Effect.catch((error) => Effect.succeed({ ok: false, path: configPath, message: error.message } as const))
-        );
+        // Entries that resolve outside the search root, such as escaping symlinks, are skipped silently.
+        const safePath = yield* outputBoundary.resolveFile(path.join(directory, entry)).pipe(Effect.option);
+        if (Option.isNone(safePath)) {
+          continue;
+        }
+
+        const info = yield* fileSystem.stat(safePath.value);
+        if (info.type === 'Directory') {
+          yield* discover(safePath.value);
+        } else if (
+          info.type === 'File' &&
+          (entry === archiveConfigFilename || (entry === legacyArchiveConfigFilename && !hasCurrentConfig))
+        ) {
+          configPaths.push(safePath.value);
+        }
       }
-    );
-  });
+    });
+
+  yield* discover(rootDirectory);
+
+  // Invalid configurations are reported individually instead of stopping discovery.
+  return yield* Effect.forEach(configPaths, (configPath) =>
+    outputBoundary.readFileString(configPath).pipe(
+      Effect.flatMap((source) => decodeArchiveConfig(source)),
+      Effect.map((config): DiscoveredArchiveConfig => ({ ok: true, path: configPath, config })),
+      Effect.catch((error) =>
+        Effect.succeed<DiscoveredArchiveConfig>({ ok: false, path: configPath, message: error.message })
+      )
+    )
+  );
+});

@@ -54,8 +54,7 @@ docs/
     │   ├── readme.md
     │   └── .github/
     │       └── security.md
-    ├── .docsdown.json
-    ├── .manifests/
+    ├── docsdown.json
     └── manifest.json
 ```
 
@@ -71,7 +70,7 @@ Refresh every archive beneath `./docs` later:
 pnpx docsdown update
 ```
 
-There is no separate configuration step. A successful initial download creates `.docsdown.json` automatically.
+There is no separate configuration step. A successful initial download creates `docsdown.json` automatically.
 
 ## Why docsdown?
 
@@ -82,7 +81,7 @@ Documentation is often optimized for browsers, not for local search, editor navi
 - **Website and GitHub providers:** Crawls documentation sites or reads Markdown and MDX directly from repositories.
 - **Offline navigation:** Rewrites links between downloaded pages and localizes referenced media.
 - **Focused archives:** Downloads one page, one GitHub folder, or several selected repository folders.
-- **Repeatable updates:** Writes `.docsdown.json` automatically and refreshes every configured archive with `docsdown update`.
+- **Repeatable updates:** Writes `docsdown.json` automatically and refreshes every configured archive with `docsdown update`.
 - **Auditable output:** Records page titles, source URLs, strategies, failures, and file digests in `manifest.json`.
 - **Conservative cleanup:** Removes stale generated files only after a complete run and preserves locally edited files.
 
@@ -212,7 +211,7 @@ GITHUB_TOKEN=github_pat_... pnpx docsdown https://github.com/owner/private-repos
   --output ./docs/private-repository
 ```
 
-The token is sent only to GitHub API requests. It is never sent to external media hosts, written to Markdown, or persisted in `.docsdown.json`.
+The token is sent only to GitHub API requests. It is never sent to external media hosts, written to Markdown, or persisted in `docsdown.json`.
 
 Providing a token is also useful for higher GitHub API rate limits when archiving public repositories.
 
@@ -237,7 +236,7 @@ Images and videos are downloaded only when referenced by selected content. Skip 
 pnpx docsdown https://example.com/docs --max-media-mb 25 --output ./docs/example
 ```
 
-The limit is checked against both the declared response size and the bytes actually received.
+The limit is checked against the declared response size and enforced while bytes are received, so an oversized file is abandoned without being buffered in full.
 
 ### Inspect request-level progress
 
@@ -249,7 +248,7 @@ pnpx docsdown https://example.com/docs --verbose --output ./docs/example
 
 ## Updating archives
 
-Every completed download writes a token-free `.docsdown.json` beside `manifest.json`. It contains everything needed to reproduce the archive:
+Every completed download writes a token-free `docsdown.json` beside `manifest.json`. It contains everything needed to reproduce the archive:
 
 ```json
 {
@@ -331,9 +330,7 @@ docs/
     ├── media/
     │   ├── example.com/images/logo.svg
     │   └── cdn.example.net/videos/demo.mp4
-    ├── .docsdown.json
-    ├── .manifests/
-    │   └── 2026-08-09T10-00-00.000Z-a1b2c3d4.json
+    ├── docsdown.json
     └── manifest.json
 ```
 
@@ -348,8 +345,7 @@ docs/
     │       └── installation.md
     ├── media/
     │   └── repository/images/logo.svg
-    ├── .docsdown.json
-    ├── .manifests/
+    ├── docsdown.json
     └── manifest.json
 ```
 
@@ -365,9 +361,9 @@ download_strategy: 'markdown-content-negotiation'
 ---
 ```
 
-Query strings are represented by stable hash suffixes so distinct URLs cannot overwrite each other.
+Common aliases of one page, such as `/guide`, `/guide/`, `/guide.md`, and `/guide/index.html`, share a single archive file, so local links resolve no matter which form a page uses. Query strings are represented by stable hash suffixes so distinct URLs cannot overwrite each other.
 
-`manifest.json` records the run status, every downloaded page and media file with its SHA-256 digest, acquisition strategy counts, and failures. Successful runs are also snapshotted to `.manifests/`. Stale files are removed only after a complete, failure-free run, and files you edited locally are preserved. See [docs/internals.md](docs/internals.md) for the manifest format and cleanup rules.
+`manifest.json` records the run status, every downloaded page and media file with its SHA-256 digest, acquisition strategy counts, and failures. Stale files are removed only after a complete, failure-free run, and files you edited locally are preserved. See [docs/internals.md](docs/internals.md) for the manifest format and cleanup rules.
 
 ## CLI reference
 
@@ -387,9 +383,9 @@ Query strings are represented by stable hash suffixes so distinct URLs cannot ov
 
 ### Update options
 
-| Option                     |  Default | Description                                                |
-| -------------------------- | -------: | ---------------------------------------------------------- |
-| `--output, -o <directory>` | `./docs` | Directory searched recursively for `.docsdown.json` files. |
+| Option                     |  Default | Description                                               |
+| -------------------------- | -------: | --------------------------------------------------------- |
+| `--output, -o <directory>` | `./docs` | Directory searched recursively for `docsdown.json` files. |
 
 The Effect CLI runtime also supplies `--help`, `--version`, shell completions, log-level selection, and interactive wizard mode. Run `docsdown --help` or `docsdown update --help` for generated help.
 
@@ -402,7 +398,7 @@ The Effect CLI runtime also supplies `--help`, `--version`, shell completions, l
 - GitHub branch names containing `/` are ambiguous in browser tree URLs. Prefer a commit SHA, a tag without slashes, or a raw-content URL.
 - GitHub recursive tree responses are limited by GitHub to 100,000 entries and 7 MB. A truncated response creates a partial manifest and never triggers cleanup.
 - Cross-scope links remain remote when their target page is not part of the archive.
-- Sites may block or rate-limit automated requests. Reduce `--concurrency` when appropriate and respect the site's terms and robots policy.
+- Sites may block or rate-limit automated requests. Each request times out after 30 seconds, and timeouts, network errors, and HTTP 408, 429, 502, 503, and 504 responses share a budget of three retries with exponential backoff. Reduce `--concurrency` when a site still rate-limits, and respect the site's terms and robots policy.
 - `docsdown` is currently pre-1.0.
 
 ## Security

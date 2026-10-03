@@ -1,12 +1,13 @@
 import { NodeServices } from '@effect/platform-node';
-import { Effect } from 'effect';
-import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { Effect, Redacted } from 'effect';
+import { link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vite-plus/test';
 import {
   archiveConfigFilename,
   discoverArchiveConfigs,
+  legacyArchiveConfigFilename,
   makeArchiveConfig,
   readArchiveConfig,
   writeArchiveConfig,
@@ -29,7 +30,7 @@ const options: DocumentationDownloadOptions = {
   keepStale: true,
   verbose: false,
   provider: 'github',
-  githubToken: 'must-not-be-stored',
+  githubToken: Redacted.make('must-not-be-stored'),
 };
 
 const run = <A>(effect: Effect.Effect<A, unknown, NodeServices.NodeServices>) =>
@@ -64,14 +65,21 @@ describe('archive update configuration', () => {
     temporaryDirectories.push(root);
     const invalidJson = path.join(root, 'invalid-json', archiveConfigFilename);
     const invalidSchema = path.join(root, 'invalid-schema', archiveConfigFilename);
+    const invalidLimit = path.join(root, 'invalid-limit', archiveConfigFilename);
     await mkdir(path.dirname(invalidJson), { recursive: true });
     await mkdir(path.dirname(invalidSchema), { recursive: true });
+    await mkdir(path.dirname(invalidLimit), { recursive: true });
     await writeFile(invalidJson, '{invalid');
     await writeFile(invalidSchema, JSON.stringify({ schemaVersion: 2 }));
+    const validConfig = makeArchiveConfig(options, 'website');
+    await writeFile(
+      invalidLimit,
+      JSON.stringify({ ...validConfig, options: { ...validConfig.options, concurrency: 0 } })
+    );
 
     const discovered = await run(discoverArchiveConfigs(root));
 
-    expect(discovered).toHaveLength(2);
+    expect(discovered).toHaveLength(3);
     expect(discovered.every((entry) => !entry.ok)).toBe(true);
     expect(discovered.map((entry) => (entry.ok ? '' : entry.message)).join('\n')).toContain('Invalid JSON');
     expect(discovered.map((entry) => (entry.ok ? '' : entry.message)).join('\n')).toContain('Invalid configuration');
@@ -110,5 +118,30 @@ describe('archive update configuration', () => {
     const discovered = await run(discoverArchiveConfigs(searchRoot));
 
     expect(discovered.filter((entry) => entry.ok)).toEqual([]);
+  });
+
+  it('keeps updating archives that still use the legacy hidden configuration name', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'docsdown-config-test-'));
+    temporaryDirectories.push(root);
+    const config = makeArchiveConfig(options, 'github');
+    const serialized = `${JSON.stringify(config, null, 2)}\n`;
+
+    const legacyOnly = path.join(root, 'legacy-only');
+    await mkdir(legacyOnly);
+    await writeFile(path.join(legacyOnly, legacyArchiveConfigFilename), serialized);
+
+    const bothNames = path.join(root, 'both-names');
+    await mkdir(bothNames);
+    await writeFile(path.join(bothNames, legacyArchiveConfigFilename), serialized);
+    await writeFile(path.join(bothNames, archiveConfigFilename), serialized);
+
+    const discovered = await run(discoverArchiveConfigs(root));
+    expect(discovered.map((entry) => entry.path)).toEqual([
+      path.join(bothNames, archiveConfigFilename),
+      path.join(legacyOnly, legacyArchiveConfigFilename),
+    ]);
+
+    await run(writeArchiveConfig(legacyOnly, config));
+    expect(await readdir(legacyOnly)).toEqual([archiveConfigFilename]);
   });
 });

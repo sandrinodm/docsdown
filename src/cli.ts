@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-import { Console, Effect, Layer, Option } from 'effect';
+import { Config, Console, Data, Effect, Layer, Option, Redacted } from 'effect';
 import { NodeHttpClient, NodeRuntime, NodeServices } from '@effect/platform-node';
-import { Argument, Command, Flag } from 'effect/cli';
+import { Argument, CliError, Command, Flag } from 'effect/cli';
 import { archiveConfigFilename } from './config.js';
+import { InvalidOptionsError } from './errors.js';
+import { resilientHttpClientLayer } from './http.js';
 import type { DownloadSummary } from './providers.js';
 import { packageVersion } from './package.js';
 import { downloadAndConfigure, updateDocumentationArchives } from './update.js';
@@ -81,9 +83,9 @@ const verbose = Flag.Boolean('verbose').pipe(
 /**
  * Source adapter policy; automatic mode recognizes GitHub repository URLs.
  */
-const provider = Flag.String('provider').pipe(
+const provider = Flag.Literals('provider', ['auto', 'website', 'github']).pipe(
   Flag.withDefault('auto'),
-  Flag.withDescription('Source provider: auto, website, or github')
+  Flag.withDescription('Source provider')
 );
 
 /**
@@ -93,6 +95,34 @@ const include = Flag.String('include').pipe(
   Flag.atLeast(0),
   Flag.withDescription('GitHub folder to include, relative to the URL scope; repeat for multiple folders')
 );
+
+/**
+ * Optional GitHub credential read from the environment and redacted before it reaches any other module.
+ *
+ * An empty variable is treated as absent so `GITHUB_TOKEN= docsdown ...` behaves like an unauthenticated run.
+ */
+const githubToken = Config.option(Config.Redacted('GITHUB_TOKEN')).pipe(
+  Config.map((token) => Option.filter(token, (value) => Redacted.value(value).length > 0)),
+  Config.map((token) => Option.getOrUndefined(token))
+);
+
+/**
+ * Aggregate outcome of an update run in which at least one archive stayed partial or failed.
+ */
+class IncompleteUpdateError extends Data.TaggedError('IncompleteUpdateError')<{
+  /**
+   * Summary line shown after the per-archive failure report.
+   */
+  readonly message: string;
+}> {}
+
+/**
+ * Presents expected failures as a concise CLI message instead of a stack trace.
+ *
+ * Domain errors already carry user-facing messages; defects keep their full diagnostic report.
+ */
+const asUserError = <A, R>(effect: Effect.Effect<A, { readonly message: string }, R>) =>
+  Effect.mapError(effect, (error) => new CliError.UserError({ cause: error, userMessage: error.message }));
 
 /**
  * Prints the outcome of one documentation archive download.
@@ -108,15 +138,19 @@ const printDownloadSummary = (summary: DownloadSummary) =>
     if (summary.filesRemoved > 0) {
       yield* Console.log(`Removed ${summary.filesRemoved} stale file(s) from the previous archive.`);
     }
+
     if (summary.filesPreserved > 0) {
       yield* Console.log(`Preserved ${summary.filesPreserved} locally modified stale file(s).`);
     }
+
     if (summary.cleanupFailures > 0) {
       yield* Console.log(`${summary.cleanupFailures} stale file(s) could not be cleaned; see manifest.json.`);
     }
+
     if (summary.truncated) {
       yield* Console.log('The crawl reached --max-pages; stale files were not cleaned.');
     }
+
     if (summary.failures.length > 0) {
       yield* Console.log(`${summary.failures.length} item(s) could not be downloaded; see manifest.json.`);
     }
@@ -141,6 +175,7 @@ const downloadCommand = Command.make('docsdown', {
     ({ url, outputDirectory, concurrency, maxPages, maxMediaMb, singlePage, keepStale, verbose, provider, include }) =>
       Effect.gen(function* () {
         const pageLimit = Option.getOrUndefined(maxPages);
+        const token = yield* githubToken;
         const summary = yield* downloadAndConfigure({
           url,
           outputDirectory,
@@ -152,10 +187,10 @@ const downloadCommand = Command.make('docsdown', {
           verbose,
           provider,
           githubPaths: include,
-          ...(process.env.GITHUB_TOKEN ? { githubToken: process.env.GITHUB_TOKEN } : {}),
+          ...(token === undefined ? {} : { githubToken: token }),
         });
         yield* printDownloadSummary(summary);
-      })
+      }).pipe(asUserError)
   ),
   Command.withDescription(
     'Download a documentation path as local Markdown, preferring native Markdown and preserving media.'
@@ -167,22 +202,27 @@ const downloadCommand = Command.make('docsdown', {
  */
 const updateCommand = Command.make('update', { outputDirectory: updateOutputDirectory }, ({ outputDirectory }) =>
   Effect.gen(function* () {
+    const token = yield* githubToken;
     const summary = yield* updateDocumentationArchives({
       outputDirectory,
-      ...(process.env.GITHUB_TOKEN ? { githubToken: process.env.GITHUB_TOKEN } : {}),
+      ...(token === undefined ? {} : { githubToken: token }),
     });
     yield* Console.log('');
     yield* Console.log(`Updated ${summary.archivesUpdated} of ${summary.configsFound} configured archive(s).`);
     for (const failure of summary.failures) {
       yield* Console.log(`Failed ${failure.configPath}: ${failure.message}`);
     }
+
     if (summary.configsFound === 0) {
-      return yield* Effect.fail(new Error(`No ${archiveConfigFilename} files found beneath ${outputDirectory}`));
+      return yield* new InvalidOptionsError({
+        message: `No ${archiveConfigFilename} files found beneath ${outputDirectory}`,
+      });
     }
+
     if (summary.failures.length > 0) {
-      return yield* Effect.fail(new Error(`${summary.failures.length} archive update(s) failed`));
+      return yield* new IncompleteUpdateError({ message: `${summary.failures.length} archive update(s) failed` });
     }
-  })
+  }).pipe(asUserError)
 ).pipe(Command.withDescription('Refresh every configured documentation archive beneath --output'));
 
 /**
@@ -191,8 +231,11 @@ const updateCommand = Command.make('update', { outputDirectory: updateOutputDire
 export const cli = downloadCommand.pipe(Command.withSubcommands([updateCommand]));
 
 /**
- * Production adapters for filesystem, terminal, and Fetch-based HTTP capabilities required by the command.
+ * Production adapters for filesystem, terminal, and Fetch-based HTTP with per-request timeouts and transient retries.
  */
-const MainLayer = Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerFetch);
+const MainLayer = Layer.mergeAll(
+  NodeServices.layer,
+  resilientHttpClientLayer().pipe(Layer.provide(NodeHttpClient.layerFetch))
+);
 
 Command.run(cli, { version: packageVersion }).pipe(Effect.provide(MainLayer), NodeRuntime.runMain);

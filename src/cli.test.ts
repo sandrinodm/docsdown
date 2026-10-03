@@ -27,11 +27,13 @@ const fixture = async () => {
       response.end(`# Documentation ${revision}\n\n[Guide](/docs/guide)\n`);
       return;
     }
+
     if (request.url === '/docs/guide.md') {
       response.writeHead(200, { 'content-type': 'text/markdown' });
       response.end('# Guide\n');
       return;
     }
+
     response.writeHead(404).end('missing');
   });
   await new Promise<void>((resolve, reject) => {
@@ -42,7 +44,10 @@ const fixture = async () => {
     });
   });
   const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Missing CLI fixture address');
+  if (!address || typeof address === 'string') {
+    throw new Error('Missing CLI fixture address');
+  }
+
   return {
     url: `http://127.0.0.1:${address.port}/docs`,
     outputDirectory,
@@ -66,7 +71,7 @@ describe('CLI migration compatibility', () => {
     try {
       const initial = await runCli(server.url, '-o', server.outputDirectory);
       expect(initial.stdout).toContain('Saved 2 page(s)');
-      const config = JSON.parse(await readFile(path.join(server.outputDirectory, '.docsdown.json'), 'utf8'));
+      const config = JSON.parse(await readFile(path.join(server.outputDirectory, 'docsdown.json'), 'utf8'));
       expect(config.options).toMatchObject({
         concurrency: 2,
         maxMediaBytes: 100 * 1024 * 1024,
@@ -108,7 +113,7 @@ describe('CLI migration compatibility', () => {
         'website'
       );
       expect(downloaded.stdout).toContain('Saved 1 page(s)');
-      const config = JSON.parse(await readFile(path.join(server.outputDirectory, '.docsdown.json'), 'utf8'));
+      const config = JSON.parse(await readFile(path.join(server.outputDirectory, 'docsdown.json'), 'utf8'));
       expect(config.provider).toBe('website');
       expect(config.options).toMatchObject({
         concurrency: 1,
@@ -130,7 +135,7 @@ describe('CLI migration compatibility', () => {
       await expect(runCli(server.url, '--output', server.outputDirectory, '--concurrency', '0')).rejects.toMatchObject({
         code: 1,
       });
-      await expect(readFile(path.join(server.outputDirectory, '.docsdown.json'), 'utf8')).rejects.toMatchObject({
+      await expect(readFile(path.join(server.outputDirectory, 'docsdown.json'), 'utf8')).rejects.toMatchObject({
         code: 'ENOENT',
       });
     } finally {

@@ -1,5 +1,6 @@
 import { Data, Effect, FileSystem, Semaphore } from 'effect';
 import * as path from 'node:path';
+import { causeMessage } from './errors.js';
 
 /**
  * Filesystem content accepted by the archive's atomic writer.
@@ -67,11 +68,6 @@ export interface OutputBoundary {
 }
 
 /**
- * Converts unknown platform failures into stable boundary diagnostics.
- */
-const causeMessage = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
-
-/**
  * Creates an output-boundary error mapper for one filesystem operation.
  */
 const boundaryError = (operation: string, filePath: string) => (cause: unknown) =>
@@ -86,240 +82,239 @@ const isBelow = (rootDirectory: string, candidate: string): boolean => {
 };
 
 /**
+ * Runs one filesystem operation, reporting any platform failure as a boundary error for that operation and path.
+ */
+const attempt = <A, E, R>(operation: string, filePath: string, effect: Effect.Effect<A, E, R>) =>
+  Effect.mapError(effect, boundaryError(operation, filePath));
+
+/**
+ * Describes a path that would leave, or be redirected within, the output root.
+ */
+const violation = (operation: string, filePath: string, message: string) =>
+  new OutputBoundaryError({ operation, filePath, message });
+
+/**
  * Establishes a canonical, fail-closed filesystem boundary for one output directory.
  *
  * Existing ancestors are resolved before use, newly required directories are created one segment at a time, and file
  * replacement uses a temporary file plus rename so final symlinks and hard links are never followed for writes.
  */
-export const makeOutputBoundary = (outputDirectory: string) =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const rootDirectory = path.resolve(outputDirectory);
-    yield* fileSystem
-      .makeDirectory(rootDirectory, { recursive: true })
-      .pipe(Effect.mapError(boundaryError('create output root', rootDirectory)));
-    const canonicalRoot = path.resolve(
-      yield* fileSystem
-        .realPath(rootDirectory)
-        .pipe(Effect.mapError(boundaryError('resolve output root', rootDirectory)))
-    );
-    const rootInfo = yield* fileSystem
-      .stat(canonicalRoot)
-      .pipe(Effect.mapError(boundaryError('inspect output root', rootDirectory)));
-    if (rootInfo.type !== 'Directory') {
-      return yield* Effect.fail(
-        new OutputBoundaryError({
-          operation: 'inspect output root',
-          filePath: rootDirectory,
-          message: 'Output root must resolve to a directory',
-        })
-      );
-    }
-    const directorySemaphore = yield* Semaphore.make(1);
+export const makeOutputBoundary = Effect.fn('makeOutputBoundary')(function* (outputDirectory: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const rootDirectory = path.resolve(outputDirectory);
 
-    /**
-     * Resolves one candidate into matching lexical and canonical locations below the root.
-     */
-    const describeCandidate = (candidate: string) =>
-      Effect.try({
-        /**
-         * Produces root-relative lexical and canonical representations without filesystem access.
-         */
-        try: () => {
-          const destination = path.resolve(candidate);
-          if (!isBelow(rootDirectory, destination)) {
-            throw new Error(`Destination must be a file beneath the output root: ${candidate}`);
-          }
-          const relative = path.relative(rootDirectory, destination);
-          return {
-            destination,
-            canonicalDestination: path.resolve(canonicalRoot, ...relative.split(path.sep)),
-            directorySegments: path
-              .dirname(relative)
-              .split(path.sep)
-              .filter((segment) => segment !== '.'),
-          };
-        },
-        catch: boundaryError('validate destination', candidate),
-      });
+  // The canonical root is the trust anchor: every later path must resolve beneath it.
+  yield* attempt('create output root', rootDirectory, fileSystem.makeDirectory(rootDirectory, { recursive: true }));
+  const canonicalRoot = path.resolve(
+    yield* attempt('resolve output root', rootDirectory, fileSystem.realPath(rootDirectory))
+  );
+  const rootInfo = yield* attempt('inspect output root', rootDirectory, fileSystem.stat(canonicalRoot));
+  if (rootInfo.type !== 'Directory') {
+    return yield* violation('inspect output root', rootDirectory, 'Output root must resolve to a directory');
+  }
 
-    /**
-     * Verifies existing parents and optionally creates missing directories without recursive traversal.
-     */
-    const inspectDirectories = (segments: ReadonlyArray<string>, create: boolean) =>
-      Effect.gen(function* () {
-        let lexicalDirectory = rootDirectory;
-        let canonicalDirectory = canonicalRoot;
-        for (const segment of segments) {
-          lexicalDirectory = path.join(lexicalDirectory, segment);
-          canonicalDirectory = path.join(canonicalDirectory, segment);
-          const exists = yield* fileSystem
-            .exists(lexicalDirectory)
-            .pipe(Effect.mapError(boundaryError('inspect output directory', lexicalDirectory)));
-          if (!exists && !create) return;
-          if (!exists) {
-            yield* fileSystem
-              .makeDirectory(lexicalDirectory)
-              .pipe(Effect.mapError(boundaryError('create output directory', lexicalDirectory)));
-          }
-          const resolved = path.resolve(
-            yield* fileSystem
-              .realPath(lexicalDirectory)
-              .pipe(Effect.mapError(boundaryError('resolve output directory', lexicalDirectory)))
-          );
-          if (resolved !== path.resolve(canonicalDirectory)) {
-            return yield* Effect.fail(
-              new OutputBoundaryError({
-                operation: 'resolve output directory',
-                filePath: lexicalDirectory,
-                message: 'Resolved directory escaped or redirected within the output root',
-              })
-            );
-          }
-          const info = yield* fileSystem
-            .stat(resolved)
-            .pipe(Effect.mapError(boundaryError('inspect output directory', lexicalDirectory)));
-          if (info.type !== 'Directory') {
-            return yield* Effect.fail(
-              new OutputBoundaryError({
-                operation: 'inspect output directory',
-                filePath: lexicalDirectory,
-                message: 'Output path ancestor must be a directory',
-              })
-            );
-          }
+  const directorySemaphore = yield* Semaphore.make(1);
+
+  /**
+   * Resolves one candidate into matching lexical and canonical locations below the root, without filesystem access.
+   */
+  const describeCandidate = (candidate: string) =>
+    Effect.try({
+      /**
+       * Rejects paths outside the root, then splits the rest into the parent directories to verify.
+       */
+      try: () => {
+        const destination = path.resolve(candidate);
+        if (!isBelow(rootDirectory, destination)) {
+          throw new Error(`Destination must be a file beneath the output root: ${candidate}`);
         }
-      });
 
-    /**
-     * Serializes directory creation so concurrent resources cannot race on a shared missing parent.
-     */
-    const verifyDirectories = (segments: ReadonlyArray<string>, create: boolean) =>
-      create ? directorySemaphore.withPermit(inspectDirectories(segments, true)) : inspectDirectories(segments, false);
+        const relative = path.relative(rootDirectory, destination);
+        return {
+          destination,
+          canonicalDestination: path.resolve(canonicalRoot, ...relative.split(path.sep)),
+          directorySegments: path
+            .dirname(relative)
+            .split(path.sep)
+            .filter((segment) => segment !== '.'),
+        };
+      },
+      catch: boundaryError('validate destination', candidate),
+    });
 
-    /**
-     * Rejects an existing final path when canonical resolution changes its destination.
-     */
-    const verifyFinalPath = (destination: string, canonicalDestination: string) =>
-      Effect.gen(function* () {
-        const exists = yield* fileSystem
-          .exists(destination)
-          .pipe(Effect.mapError(boundaryError('inspect output file', destination)));
-        if (!exists) return;
-        const resolved = path.resolve(
-          yield* fileSystem
-            .realPath(destination)
-            .pipe(Effect.mapError(boundaryError('resolve output file', destination)))
+  /**
+   * Walks the parent directories one segment at a time, optionally creating missing ones.
+   *
+   * Each existing segment must resolve to exactly where it should be, so a symlinked or redirected parent is rejected
+   * before anything is read or written through it.
+   */
+  const inspectDirectories = (segments: ReadonlyArray<string>, create: boolean) =>
+    Effect.gen(function* () {
+      let lexicalDirectory = rootDirectory;
+      let canonicalDirectory = canonicalRoot;
+
+      for (const segment of segments) {
+        lexicalDirectory = path.join(lexicalDirectory, segment);
+        canonicalDirectory = path.join(canonicalDirectory, segment);
+
+        const exists = yield* attempt(
+          'inspect output directory',
+          lexicalDirectory,
+          fileSystem.exists(lexicalDirectory)
         );
-        if (resolved !== canonicalDestination) {
-          return yield* Effect.fail(
-            new OutputBoundaryError({
-              operation: 'resolve output file',
-              filePath: destination,
-              message: 'Resolved file escaped or redirected within the output root',
+        if (!exists && !create) {
+          return;
+        }
+
+        if (!exists) {
+          yield* attempt('create output directory', lexicalDirectory, fileSystem.makeDirectory(lexicalDirectory));
+        }
+
+        const resolved = path.resolve(
+          yield* attempt('resolve output directory', lexicalDirectory, fileSystem.realPath(lexicalDirectory))
+        );
+        if (resolved !== path.resolve(canonicalDirectory)) {
+          return yield* violation(
+            'resolve output directory',
+            lexicalDirectory,
+            'Resolved directory escaped or redirected within the output root'
+          );
+        }
+
+        const info = yield* attempt('inspect output directory', lexicalDirectory, fileSystem.stat(resolved));
+        if (info.type !== 'Directory') {
+          return yield* violation(
+            'inspect output directory',
+            lexicalDirectory,
+            'Output path ancestor must be a directory'
+          );
+        }
+      }
+    });
+
+  /**
+   * Serializes directory creation so concurrent resources cannot race on a shared missing parent.
+   */
+  const verifyDirectories = (segments: ReadonlyArray<string>, create: boolean) =>
+    create ? directorySemaphore.withPermit(inspectDirectories(segments, true)) : inspectDirectories(segments, false);
+
+  /**
+   * Rejects an existing final path when canonical resolution changes its destination.
+   */
+  const verifyFinalPath = (destination: string, canonicalDestination: string) =>
+    Effect.gen(function* () {
+      const exists = yield* attempt('inspect output file', destination, fileSystem.exists(destination));
+      if (!exists) {
+        return;
+      }
+
+      const resolved = path.resolve(
+        yield* attempt('resolve output file', destination, fileSystem.realPath(destination))
+      );
+      if (resolved !== canonicalDestination) {
+        return yield* violation(
+          'resolve output file',
+          destination,
+          'Resolved file escaped or redirected within the output root'
+        );
+      }
+    });
+
+  /**
+   * Validates one destination without creating its missing parent directories.
+   */
+  const resolveFile: OutputBoundary['resolveFile'] = (candidate) =>
+    Effect.gen(function* () {
+      const described = yield* describeCandidate(candidate);
+      yield* verifyDirectories(described.directorySegments, false);
+      yield* verifyFinalPath(described.destination, described.canonicalDestination);
+      return described.destination;
+    });
+
+  /**
+   * Converts one verified lexical destination into its canonical root-relative location.
+   */
+  const canonicalFile = (destination: string): string =>
+    path.resolve(canonicalRoot, ...path.relative(rootDirectory, destination).split(path.sep));
+
+  /**
+   * Checks one destination only after canonical validation.
+   */
+  const exists: OutputBoundary['exists'] = (candidate) =>
+    Effect.gen(function* () {
+      const destination = yield* resolveFile(candidate);
+      return yield* attempt('inspect output file', destination, fileSystem.exists(canonicalFile(destination)));
+    });
+
+  /**
+   * Reads binary content from the canonical root-relative destination.
+   */
+  const readFile: OutputBoundary['readFile'] = (candidate) =>
+    Effect.gen(function* () {
+      const destination = yield* resolveFile(candidate);
+      return yield* attempt('read output file', destination, fileSystem.readFile(canonicalFile(destination)));
+    });
+
+  /**
+   * Reads text content from the canonical root-relative destination.
+   */
+  const readFileString: OutputBoundary['readFileString'] = (candidate) =>
+    Effect.gen(function* () {
+      const destination = yield* resolveFile(candidate);
+      return yield* attempt('read output file', destination, fileSystem.readFileString(canonicalFile(destination)));
+    });
+
+  /**
+   * Creates parents safely and atomically replaces one destination.
+   *
+   * Content goes to a temporary file in the same directory first and is then renamed over the destination, so readers
+   * never see a partial file and an existing symlink or hard link at the destination is replaced rather than followed.
+   */
+  const writeFile: OutputBoundary['writeFile'] = (candidate, content) =>
+    Effect.gen(function* () {
+      const { destination, canonicalDestination, directorySegments } = yield* describeCandidate(candidate);
+      yield* verifyDirectories(directorySegments, true);
+      yield* verifyFinalPath(destination, canonicalDestination);
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const temporaryFile = yield* attempt(
+            'create temporary output file',
+            destination,
+            fileSystem.makeTempFileScoped({
+              directory: path.dirname(canonicalDestination),
+              prefix: '.docsdown-',
+              suffix: '.tmp',
             })
           );
-        }
-      });
 
-    /**
-     * Validates one destination without creating its missing parent directories.
-     */
-    const resolveFile: OutputBoundary['resolveFile'] = (candidate) =>
-      Effect.gen(function* () {
-        const described = yield* describeCandidate(candidate);
-        yield* verifyDirectories(described.directorySegments, false);
-        yield* verifyFinalPath(described.destination, described.canonicalDestination);
-        return described.destination;
-      });
+          const write =
+            typeof content === 'string'
+              ? fileSystem.writeFileString(temporaryFile, content)
+              : fileSystem.writeFile(temporaryFile, content);
+          yield* attempt('write temporary output file', destination, write);
 
-    /**
-     * Converts one verified lexical destination into its canonical root-relative location.
-     */
-    const canonicalFile = (destination: string): string =>
-      path.resolve(canonicalRoot, ...path.relative(rootDirectory, destination).split(path.sep));
+          yield* attempt('replace output file', destination, fileSystem.rename(temporaryFile, canonicalDestination));
+        })
+      );
+    });
 
-    /**
-     * Checks one destination only after canonical validation.
-     */
-    const exists: OutputBoundary['exists'] = (candidate) =>
-      Effect.gen(function* () {
-        const destination = yield* resolveFile(candidate);
-        return yield* fileSystem
-          .exists(canonicalFile(destination))
-          .pipe(Effect.mapError(boundaryError('inspect output file', destination)));
-      });
+  /**
+   * Removes one canonical root-relative destination after revalidation.
+   */
+  const removeFile: OutputBoundary['removeFile'] = (candidate) =>
+    Effect.gen(function* () {
+      const destination = yield* resolveFile(candidate);
+      yield* attempt('remove output file', destination, fileSystem.remove(canonicalFile(destination), { force: true }));
+    });
 
-    /**
-     * Reads binary content from the canonical root-relative destination.
-     */
-    const readFile: OutputBoundary['readFile'] = (candidate) =>
-      Effect.gen(function* () {
-        const destination = yield* resolveFile(candidate);
-        return yield* fileSystem
-          .readFile(canonicalFile(destination))
-          .pipe(Effect.mapError(boundaryError('read output file', destination)));
-      });
-
-    /**
-     * Reads text content from the canonical root-relative destination.
-     */
-    const readFileString: OutputBoundary['readFileString'] = (candidate) =>
-      Effect.gen(function* () {
-        const destination = yield* resolveFile(candidate);
-        return yield* fileSystem
-          .readFileString(canonicalFile(destination))
-          .pipe(Effect.mapError(boundaryError('read output file', destination)));
-      });
-
-    /**
-     * Creates parents safely and atomically replaces one destination.
-     */
-    const writeFile: OutputBoundary['writeFile'] = (candidate, content) =>
-      Effect.gen(function* () {
-        const described = yield* describeCandidate(candidate);
-        yield* verifyDirectories(described.directorySegments, true);
-        yield* verifyFinalPath(described.destination, described.canonicalDestination);
-        const canonicalDirectory = path.dirname(described.canonicalDestination);
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const temporaryFile = yield* fileSystem
-              .makeTempFileScoped({ directory: canonicalDirectory, prefix: '.docsdown-', suffix: '.tmp' })
-              .pipe(Effect.mapError(boundaryError('create temporary output file', described.destination)));
-            if (typeof content === 'string') {
-              yield* fileSystem
-                .writeFileString(temporaryFile, content)
-                .pipe(Effect.mapError(boundaryError('write temporary output file', described.destination)));
-            } else {
-              yield* fileSystem
-                .writeFile(temporaryFile, content)
-                .pipe(Effect.mapError(boundaryError('write temporary output file', described.destination)));
-            }
-            yield* fileSystem
-              .rename(temporaryFile, described.canonicalDestination)
-              .pipe(Effect.mapError(boundaryError('replace output file', described.destination)));
-          })
-        );
-      });
-
-    /**
-     * Removes one canonical root-relative destination after revalidation.
-     */
-    const removeFile: OutputBoundary['removeFile'] = (candidate) =>
-      Effect.gen(function* () {
-        const destination = yield* resolveFile(candidate);
-        yield* fileSystem
-          .remove(canonicalFile(destination), { force: true })
-          .pipe(Effect.mapError(boundaryError('remove output file', destination)));
-      });
-
-    return {
-      rootDirectory,
-      resolveFile,
-      exists,
-      readFile,
-      readFileString,
-      writeFile,
-      removeFile,
-    } satisfies OutputBoundary;
-  });
+  return {
+    rootDirectory,
+    resolveFile,
+    exists,
+    readFile,
+    readFileString,
+    writeFile,
+    removeFile,
+  } satisfies OutputBoundary;
+});

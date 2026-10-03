@@ -45,7 +45,7 @@ A shortened example:
 }
 ```
 
-Every fully successful run is also copied to `.manifests/<run-id>.json`. These immutable snapshots provide a history that can be compared or indexed independently. Partial attempts update `manifest.json` but do not create a successful history snapshot.
+Each run replaces `manifest.json`; docsdown keeps no history of earlier runs.
 
 ## Safe stale-file cleanup
 
@@ -60,7 +60,7 @@ After a complete update, files owned by the previous archive but absent from the
 | `--keep-stale` used        | Retains stale files while preserving ownership for a later run. |
 | File absent already        | Treats it as safely removed.                                    |
 
-Only paths previously recorded by docsdown with a valid digest are cleanup candidates. `.docsdown.json`, `manifest.json`, and `.manifests/` are never cleanup targets.
+Only paths previously recorded by docsdown with a valid digest are cleanup candidates. `docsdown.json` and `manifest.json` are never cleanup targets.
 
 ## Filesystem safety
 
@@ -70,9 +70,11 @@ Every filesystem mutation passes through one canonical output boundary:
 
 - Literal, percent-encoded, double-encoded, and Unicode dot segments cannot escape the archive.
 - Existing parent directories are resolved before use. A symlink or redirected parent that leaves the archive is rejected.
-- Page, media, manifest, history, and configuration writes use a temporary file followed by an atomic rename. Final symlinks and hard links are not followed for writes.
+- Page, media, manifest, and configuration writes use a temporary file followed by an atomic rename. Final symlinks and hard links are not followed for writes.
 - Stale cleanup resolves and revalidates owned files before reading or removing them.
 - `docsdown update` does not accept configurations reached through a directory symlink outside its search root.
+- `docsdown update` ignores `docsdown.json` files inside an archive's `content/` and `media/` trees, so downloaded content can never act as an update configuration.
+- Malformed percent-encoding in remote links is tolerated; it cannot abort a run.
 
 The path passed to `--output` is the trust anchor. If that path is itself a symlink, its canonical target becomes the archive root. The boundary protects against remote path input and pre-existing redirected paths. As with other portable filesystem tools, the output tree should not be concurrently mutated by an untrusted local process while a run is in progress.
 

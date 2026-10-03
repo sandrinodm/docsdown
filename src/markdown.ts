@@ -117,13 +117,33 @@ interface RewriteContext {
 }
 
 /**
+ * Serialization style shared by every pipeline so archived Markdown is formatted consistently.
+ */
+const stringifyOptions = {
+  /**
+   * Uses `-` for every unordered list item.
+   */
+  bullet: '-',
+
+  /**
+   * Always writes code blocks as fenced blocks rather than indented ones.
+   */
+  fences: true,
+
+  /**
+   * Indents list item content by one space after the marker.
+   */
+  listItemIndent: 'one',
+} as const;
+
+/**
  * GFM-aware parser and serializer shared by native Markdown inputs.
  */
-const markdownProcessor = unified().use(remarkParse).use(remarkFrontmatter).use(remarkGfm).use(remarkStringify, {
-  bullet: '-',
-  fences: true,
-  listItemIndent: 'one',
-});
+const markdownProcessor = unified()
+  .use(remarkParse)
+  .use(remarkFrontmatter)
+  .use(remarkGfm)
+  .use(remarkStringify, stringifyOptions);
 
 /**
  * MDX-aware parser and serializer used only for `.mdx` repository sources.
@@ -133,11 +153,7 @@ const mdxProcessor = unified()
   .use(remarkFrontmatter)
   .use(remarkMdx)
   .use(remarkGfm)
-  .use(remarkStringify, {
-    bullet: '-',
-    fences: true,
-    listItemIndent: 'one',
-  });
+  .use(remarkStringify, stringifyOptions);
 
 /**
  * HTML-to-Markdown pipeline used after the relevant documentation fragment has been extracted.
@@ -146,24 +162,29 @@ const htmlProcessor = unified()
   .use(rehypeParse, { fragment: true })
   .use(rehypeRemark, { document: false })
   .use(remarkGfm)
-  .use(remarkStringify, {
-    bullet: '-',
-    fences: true,
-    listItemIndent: 'one',
-  });
+  .use(remarkStringify, stringifyOptions);
 
 /**
  * Resolves one reference against an already selected base URL and applies shared documentation URL normalization.
  */
 const resolveHttpReferenceAgainst = (value: string, base: URL): URL | undefined => {
   const destination = value.startsWith('`') && value.endsWith('`') ? value.slice(1, -1) : value;
-  if (!destination || /^(?:data|mailto|tel|javascript):/i.test(destination)) return undefined;
+  if (!destination || /^(?:data|mailto|tel|javascript):/i.test(destination)) {
+    return undefined;
+  }
+
   try {
     const url = new URL(destination, base);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return undefined;
+    }
+
+    // Some generators link a section index as `section/.md`; the page itself is `section/`.
     if (url.pathname.endsWith('/.md')) {
       url.pathname = url.pathname.slice(0, -'.md'.length);
     }
+
+    // A lone `?id=heading` is an in-page anchor written as a query; treat it as `#heading`.
     if (url.searchParams.size === 1 && url.searchParams.has('id')) {
       const section = url.searchParams.get('id')?.trim();
       if (section) {
@@ -171,6 +192,7 @@ const resolveHttpReferenceAgainst = (value: string, base: URL): URL | undefined 
         url.hash = section;
       }
     }
+
     return url;
   } catch {
     return undefined;
@@ -189,10 +211,12 @@ export const resolveStandardHttpReference = (value: string, base: URL): URL | un
  * Resolves a reference to HTTP(S), including compatibility for documentation hosts that expose per-page `llms.txt`.
  */
 export const resolveHttpReference = (value: string, base: URL): URL | undefined => {
+  // Links inside a per-page `guide/llms.txt` are relative to the page `guide`, not to the index file.
   const referenceBase = new URL(base);
   if (referenceBase.pathname.endsWith('/llms.txt')) {
     referenceBase.pathname = referenceBase.pathname.slice(0, -'/llms.txt'.length) || '/';
   }
+
   return resolveHttpReferenceAgainst(value, referenceBase);
 };
 
@@ -203,11 +227,14 @@ const uniqueUrls = (urls: Iterable<URL>): Array<URL> => {
   const seen = new Set<string>();
   const result: Array<URL> = [];
   for (const url of urls) {
-    const href = url.href;
-    if (seen.has(href)) continue;
-    seen.add(href);
+    if (seen.has(url.href)) {
+      continue;
+    }
+
+    seen.add(url.href);
     result.push(url);
   }
+
   return result;
 };
 
@@ -228,13 +255,19 @@ const normalizeTitle = (value: string): string | undefined => {
 const frontmatterTitle = (source: string): string | undefined => {
   const frontmatter = source.match(/^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u)?.[1];
   const rawTitle = frontmatter?.match(/^title:[ \t]*(.*?)[ \t]*$/mu)?.[1];
-  if (!rawTitle || rawTitle === '|' || rawTitle === '>') return undefined;
+
+  // Block scalars (`title: |`) span several lines and are not worth a YAML parser here.
+  if (!rawTitle || rawTitle === '|' || rawTitle === '>') {
+    return undefined;
+  }
 
   let title = rawTitle;
   if (rawTitle.startsWith('"') && rawTitle.endsWith('"')) {
     try {
       const parsed = JSON.parse(rawTitle) as unknown;
-      if (typeof parsed === 'string') title = parsed;
+      if (typeof parsed === 'string') {
+        title = parsed;
+      }
     } catch {
       title = rawTitle.slice(1, -1);
     }
@@ -253,41 +286,93 @@ const frontmatterTitle = (source: string): string | undefined => {
 const firstSrcsetUrl = (value: string | undefined): string | undefined => value?.split(',')[0]?.trim().split(/\s+/)[0];
 
 /**
+ * Reads an image's source, including the lazy-loading attributes many documentation themes use instead of `src`.
+ */
+const imageSource = (element: { attr(name: string): string | undefined }): string | undefined =>
+  element.attr('src') ||
+  element.attr('data-src') ||
+  element.attr('data-lazy-src') ||
+  firstSrcsetUrl(element.attr('srcset'));
+
+/**
  * Localizes links inside raw HTML nodes that remain embedded in Markdown.
  *
  * Discovered page and media URLs are appended to the supplied collections for crawl scheduling.
  */
 const rewriteHtmlAttributes = (html: string, context: RewriteContext, links: Array<URL>, media: Array<URL>): string => {
   const $ = load(html, null, false);
+
   $('a[href]').each((_, element) => {
     const url = resolveHttpReference($(element).attr('href') as string, context.pageUrl);
-    if (!url) return;
+    if (!url) {
+      return;
+    }
+
     links.push(url);
     const local = context.resolvePageFile(url);
     if (local) {
       $(element).attr('href', `${context.relativePath(context.pageFile, local)}${url.hash}`);
     }
   });
+
   $('img, video, source').each((_, element) => {
-    const source =
-      $(element).attr('src') ||
-      $(element).attr('data-src') ||
-      $(element).attr('data-lazy-src') ||
-      firstSrcsetUrl($(element).attr('srcset'));
-    const url = resolveHttpReference(source ?? '', context.pageUrl);
-    if (!url) return;
+    const url = resolveHttpReference(imageSource($(element)) ?? '', context.pageUrl);
+    if (!url) {
+      return;
+    }
+
     media.push(url);
     const local = context.resolveMediaFile(url);
-    if (local) $(element).attr('src', context.relativePath(context.pageFile, local));
+    if (local) {
+      $(element).attr('src', context.relativePath(context.pageFile, local));
+    }
   });
+
   $('video[poster]').each((_, element) => {
     const url = resolveHttpReference($(element).attr('poster') as string, context.pageUrl);
-    if (!url) return;
+    if (!url) {
+      return;
+    }
+
     media.push(url);
     const local = context.resolveMediaFile(url);
-    if (local) $(element).attr('poster', context.relativePath(context.pageFile, local));
+    if (local) {
+      $(element).attr('poster', context.relativePath(context.pageFile, local));
+    }
   });
+
   return $.root().html() as string;
+};
+
+/**
+ * Reads the plain text of the document's first heading, ignoring formatting such as links or emphasis.
+ */
+const firstHeadingText = (tree: Root): string | undefined => {
+  const heading = tree.children.find((node) => node.type === 'heading');
+  if (heading?.type !== 'heading') {
+    return undefined;
+  }
+
+  const text = heading.children
+    .filter((node) => node.type === 'text' || node.type === 'inlineCode')
+    .map((node) => String(node.value))
+    .join('');
+  return normalizeTitle(text);
+};
+
+/**
+ * Chooses a document title, preferring frontmatter over the first heading.
+ *
+ * Some generators emit the placeholder frontmatter title `index`; the heading is more useful in that case.
+ */
+const documentTitle = (source: string, tree: Root): string | undefined => {
+  const metadataTitle = frontmatterTitle(source);
+  const headingTitle = firstHeadingText(tree);
+  if (metadataTitle?.toLowerCase() === 'index') {
+    return headingTitle ?? metadataTitle;
+  }
+
+  return metadataTitle ?? headingTitle;
 };
 
 /**
@@ -306,53 +391,67 @@ const rewriteMarkdown = (source: string, context: RewriteContext): MarkdownDocum
    */
   const rewriteLink = (node: { url: string }): void => {
     const url = resolveHttpReference(node.url, context.pageUrl);
-    if (!url) return;
+    if (!url) {
+      return;
+    }
+
+    // A plain link to an image or video is downloaded like an embedded one.
     const mediaFile = context.isMediaUrl(url) ? context.resolveMediaFile(url) : undefined;
     if (mediaFile) {
       media.push(url);
       node.url = context.relativePath(context.pageFile, mediaFile);
       return;
     }
+
     links.push(url);
     const pageFile = context.resolvePageFile(url);
-    if (pageFile) node.url = `${context.relativePath(context.pageFile, pageFile)}${url.hash}`;
+    if (pageFile) {
+      node.url = `${context.relativePath(context.pageFile, pageFile)}${url.hash}`;
+    }
   };
-  visit(tree, 'link', rewriteLink);
-  visit(tree, 'definition', rewriteLink);
+
+  visit(tree, 'link', (node) => rewriteLink(node));
+  visit(tree, 'definition', (node) => rewriteLink(node));
 
   visit(tree, 'image', (node: { url: string }) => {
     const url = resolveHttpReference(node.url, context.pageUrl);
-    if (!url) return;
+    if (!url) {
+      return;
+    }
+
     media.push(url);
     const mediaFile = context.resolveMediaFile(url);
-    if (mediaFile) node.url = context.relativePath(context.pageFile, mediaFile);
+    if (mediaFile) {
+      node.url = context.relativePath(context.pageFile, mediaFile);
+    }
   });
 
   visit(tree, 'html', (node: { value: string }) => {
     node.value = rewriteHtmlAttributes(node.value, context, links, media);
   });
 
-  const firstHeading = tree.children.find((node) => node.type === 'heading');
-  let headingTitle: string | undefined;
-  if (firstHeading?.type === 'heading') {
-    headingTitle = normalizeTitle(
-      firstHeading.children
-        .filter((node) => node.type === 'text' || node.type === 'inlineCode')
-        .map((node) => String(node.value))
-        .join('')
-    );
-  }
-  const metadataTitle = frontmatterTitle(source);
-  const title =
-    metadataTitle?.toLowerCase() === 'index' ? (headingTitle ?? metadataTitle) : (metadataTitle ?? headingTitle);
-
   return {
     markdown: processor.stringify(tree).trimEnd() + '\n',
-    title,
+    title: documentTitle(source, tree),
     links: uniqueUrls(links),
     media: uniqueUrls(media),
   };
 };
+
+/**
+ * Elements that hold the main content in common documentation themes, most generic first.
+ *
+ * The list covers semantic HTML plus Docusaurus, VitePress, and GitHub-style Markdown containers.
+ */
+const contentSelectors = [
+  'main',
+  'article',
+  "[role='main']",
+  '.theme-doc-markdown',
+  '.vp-doc',
+  '.docs-content',
+  '.markdown-body',
+];
 
 /**
  * Extracts the most likely documentation body and title from a complete HTML response.
@@ -362,23 +461,17 @@ const rewriteMarkdown = (source: string, context: RewriteContext): MarkdownDocum
 const preferredContent = (html: string): { readonly content: string; readonly title?: string } => {
   const $ = load(html);
   const title = $('main h1, article h1, h1').first().text().trim() || $('title').first().text().trim() || undefined;
+
   $('script, style, noscript, template, nav, footer, form, button, svg').remove();
   $('i:empty, em:empty, strong:empty, b:empty').remove();
-  const selectors = [
-    'main',
-    'article',
-    "[role='main']",
-    '.theme-doc-markdown',
-    '.vp-doc',
-    '.docs-content',
-    '.markdown-body',
-  ];
-  for (const selector of selectors) {
+
+  for (const selector of contentSelectors) {
     const candidate = $(selector).first();
     if (candidate.length > 0 && candidate.text().trim().length > 0) {
       return { content: candidate.html() as string, ...(title ? { title } : {}) };
     }
   }
+
   return { content: $('body').html() as string, ...(title ? { title } : {}) };
 };
 
@@ -393,27 +486,35 @@ const htmlToMarkdown = (html: string, pageUrl: URL): { readonly markdown: string
 
   $('a[href]').each((_, element) => {
     const url = resolveHttpReference($(element).attr('href') as string, pageUrl);
-    if (url) $(element).attr('href', url.href);
+    if (url) {
+      $(element).attr('href', url.href);
+    }
   });
+
   $('img').each((_, element) => {
-    const source =
-      $(element).attr('src') ||
-      $(element).attr('data-src') ||
-      $(element).attr('data-lazy-src') ||
-      firstSrcsetUrl($(element).attr('srcset'));
+    const source = imageSource($(element));
     const url = source ? resolveHttpReference(source, pageUrl) : undefined;
-    if (url) $(element).attr('src', url.href);
+    if (url) {
+      $(element).attr('src', url.href);
+    }
   });
+
   $('video, video source').each((_, element) => {
     const source = $(element).attr('src') || firstSrcsetUrl($(element).attr('srcset'));
     const url = resolveHttpReference(source ?? '', pageUrl);
-    if (url) $(element).attr('src', url.href);
-  });
-  $('video[poster]').each((_, element) => {
-    const url = resolveHttpReference($(element).attr('poster') as string, pageUrl);
-    if (url) $(element).attr('poster', url.href);
+    if (url) {
+      $(element).attr('src', url.href);
+    }
   });
 
+  $('video[poster]').each((_, element) => {
+    const url = resolveHttpReference($(element).attr('poster') as string, pageUrl);
+    if (url) {
+      $(element).attr('poster', url.href);
+    }
+  });
+
+  // Markdown has no video syntax, so each video becomes its poster image plus links to its sources.
   $('video').each((_, element) => {
     const video = $(element);
     const poster = video.attr('poster');
@@ -424,13 +525,16 @@ const htmlToMarkdown = (html: string, pageUrl: URL): { readonly markdown: string
         .map((__, source) => $(source).attr('src'))
         .get(),
     ].filter((value): value is string => Boolean(value));
+
     const replacement = $('<div></div>');
     if (poster) {
       replacement.append($('<img>').attr('src', poster).attr('alt', 'Video poster'));
     }
+
     for (const source of sources) {
       replacement.append($('<a>Video</a>').attr('href', source));
     }
+
     video.replaceWith(replacement);
   });
 
@@ -450,6 +554,7 @@ export const localizeDocument = (document: LocalDocumentInput, policy: Localizat
     document.format === 'html'
       ? htmlToMarkdown(document.source, document.url)
       : { markdown: document.source, title: undefined };
+
   const localized = rewriteMarkdown(converted.markdown, {
     mdx: document.format === 'mdx',
     pageUrl: document.url,
@@ -459,5 +564,6 @@ export const localizeDocument = (document: LocalDocumentInput, policy: Localizat
     isMediaUrl,
     relativePath: markdownRelativePath,
   });
+
   return converted.title ? { ...localized, title: converted.title } : localized;
 };

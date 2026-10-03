@@ -38,14 +38,19 @@ export const llmsIndexCandidates = (startUrl: URL, scopePath: string): ReadonlyA
   const directories = ['/', scopePath === '/' ? '/' : `${scopePath.replace(/\/+$/u, '')}/`];
   const seen = new Set<string>();
   const candidates: Array<LlmsIndexCandidate> = [];
+
   for (const directory of directories) {
     for (const filename of ['llms.txt', 'llms-full.txt'] as const) {
       const url = new URL(filename, new URL(directory, startUrl));
-      if (seen.has(url.href)) continue;
+      if (seen.has(url.href)) {
+        continue;
+      }
+
       seen.add(url.href);
       candidates.push({ filename, url });
     }
   }
+
   return candidates;
 };
 
@@ -54,14 +59,19 @@ export const llmsIndexCandidates = (startUrl: URL, scopePath: string): ReadonlyA
  */
 const extractLlmsTxtReferences = (source: string): ReadonlyArray<string> => {
   const tree = unified().use(remarkParse).parse(source) as Root;
+
   const references: Array<string> = [];
   visit(tree, 'listItem', (listItem) => {
     let reference: string | undefined;
     visit(listItem, 'link', (link) => {
       reference ??= link.url;
     });
-    if (reference !== undefined) references.push(reference);
+
+    if (reference !== undefined) {
+      references.push(reference);
+    }
   });
+
   return references;
 };
 
@@ -90,9 +100,13 @@ export const extractLlmsIndexLinks = (
   const links: Array<URL> = [];
   for (const reference of references) {
     const url = resolveStandardHttpReference(reference, baseUrl);
-    if (!url || seen.has(url.href)) continue;
+    if (!url || seen.has(url.href)) {
+      continue;
+    }
+
     seen.add(url.href);
     links.push(url);
   }
+
   return links;
 };

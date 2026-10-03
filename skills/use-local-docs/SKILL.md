@@ -1,6 +1,6 @@
 ---
 name: use-local-docs
-description: Use locally downloaded docsdown documentation for library-dependent development, debugging, configuration, tests, and code reviews. Applies when a project contains documentation archives in docs/libraries, downloaded-docs, or another directory with .docsdown.json files.
+description: Use locally downloaded docsdown documentation for library-dependent development, debugging, configuration, tests, and code reviews. Applies when a project contains documentation archives in docs/libraries, downloaded-docs, or another directory with docsdown.json files.
 ---
 
 # Use local docs
@@ -12,10 +12,10 @@ Use locally downloaded library documentation as a working reference when develop
 Start with the project's instructions and documentation index, often `docs/libraries/README.md`. Use the configured location when one is documented. Otherwise, discover archives from the project root:
 
 ```sh
-rg --files --hidden --no-ignore -g '.docsdown.json' -g '!**/node_modules/**' -g '!**/.git/**'
+rg --files --no-ignore -g 'docsdown.json' -g '!**/node_modules/**' -g '!**/.git/**'
 ```
 
-The directory containing `.docsdown.json` is an archive root. Its configuration identifies the original source and download scope; `manifest.json` indexes downloaded pages, file paths, timestamps, and failures. Website archives and GitHub archives have different layouts, so use the manifest to locate pages when filenames are unclear.
+The directory containing `docsdown.json` is an archive root. Its configuration identifies the original source and download scope; `manifest.json` indexes downloaded pages, file paths, timestamps, and failures. Website archives and GitHub archives have different layouts, so use the manifest to locate pages when filenames are unclear.
 
 Choose the archive that matches the project's dependency and runtime. Check installed versions in package manifests and lockfiles against the documentation's version or scope. A download timestamp identifies a snapshot, not the installed library version; a source containing `latest` can change between refreshes.
 
